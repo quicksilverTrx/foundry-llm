@@ -7,3 +7,22 @@ def test_attention():
     x = torch.randn(2, 5, 32)
     y = mha(x)
     assert y.shape == (2, 5, 32)
+
+def test_attention_is_causal():
+    cfg = MultiHeadAttentionConfig(d_model=16, n_heads=2, dropout=0.0)
+    attn = MultiHeadAttention(cfg)
+    torch.manual_seed(0)
+
+    B, T, C = 1, 4, 16
+    x = torch.zeros(B, T, C)
+
+    # baseline
+    y1 = attn(x).detach()
+
+    # change only the last token
+    x2 = x.clone()
+    x2[:, -1, :] = torch.randn_like(x2[:, -1, :])
+    y2 = attn(x2).detach()
+
+    # earlier positions must not change
+    assert torch.allclose(y1[:, :-1, :], y2[:, :-1, :], atol=1e-5)
