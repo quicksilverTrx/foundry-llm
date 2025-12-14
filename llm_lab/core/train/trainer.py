@@ -8,11 +8,18 @@ from torch import nn
 from torch.utils.data import DataLoader
 import torch
 
+import csv
+from pathlib import Path
+
 @dataclass
 class TrainerConfig:
     device: str = "cpu"
     lr: float = 3e-4
     max_grad_norm: float = 1.0
+
+    log_dir: Optional[str] = None     
+    log_every_n_steps: int = 100       
+    num_epochs: int = 1                
 
 class Trainer:
     def __init__(self,
@@ -34,12 +41,22 @@ class Trainer:
         
         self.loss_fn = torch.nn.CrossEntropyLoss()
 
-    def train_epoch(self) -> float:
+        self.global_step = 0
+        if config.log_dir is not None:
+            self.log_dir = config.log_dir
+            self.log_dir.mkdir (parents = True, exist_ok = True)
+            self.metrics_path = self.log_dir/"loss_curve.csv"
+        else:
+            self.log_dir = None
+            self.metrics_path = None
+
+    def train_epoch(self,epoch_index: int) -> float:
         self.model.train()
         total_loss = 0
         if len(self.train_loader) <=0 :
             raise ValueError ("train_loader is empty")
         for i, data in enumerate(self.train_loader):
+            self.global_step += 1
             inputs, labels = data
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
@@ -53,10 +70,17 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.config.max_grad_norm)
             self.optimizer.step()
             total_loss +=loss.item()
+            if (self.global_step % self.config.log_every_n_steps) == 0:
+                self._log_metrics(
+                    split="train",
+                    epoch=epoch_index,
+                    step=self.global_step,
+                    loss=loss.item(),
+                )
 
         return total_loss/len(self.train_loader)
     
-    def evaluate(self) -> float:
+    def evaluate(self, epoch_index: int) -> float:
         if self.val_loader is None: return 0.0
         if len(self.val_loader)>0:
             self.model.eval()
@@ -72,17 +96,28 @@ class Trainer:
                     labels_flat = labels.view(B*T)
                     loss = self.loss_fn(outputs_flat,labels_flat)
                     eval_loss += loss.item()
-            return eval_loss/len(self.val_loader)
+            avg_loss = eval_loss / len(self.val_loader)   
+            self._log_metrics(
+                split="val",
+                epoch=epoch_index,
+                step=self.global_step,
+                loss=avg_loss,
+                )
+            return avg_loss
         else :
             return 0
     
-    def fit(self,num_epochs: int) -> None : 
+    def fit(self,num_epochs:Optional[int] = None) -> None : 
+        if num_epochs is None:
+            num_epochs = self.config.num_epochs
+
         for i in range(num_epochs):
-            training_loss_per_batch=self.train_epoch()
-            eval_loss_per_batch=self.evaluate()
+            training_loss_per_batch=self.train_epoch(epoch_index=i)
+            eval_loss_per_batch=self.evaluate(epoch_index=i)
             if i % 10 == 0 :
                 print(f"training loss per batch at epoch {i} is {training_loss_per_batch}")
                 print(f"Eval loss per batch at epoch {i} is {eval_loss_per_batch}")
+    
     def save_checkpoint(self, path: str) -> None:
         check_point = {"model_state":self.model.state_dict(),
                        "optimizer_state": self.optimizer.state_dict(),
@@ -93,3 +128,24 @@ class Trainer:
         checkpoint = torch.load(path,map_location=self.device)
         self.model.load_state_dict(checkpoint["model_state"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+    def _log_metrics(
+        self,
+        *,
+        split: str,
+        epoch: int,
+        step: int,
+        loss: float,
+    ) -> None:
+        """
+        Minimal helper to append a row to loss_curve.csv.
+        """
+        if self.metrics_path is None:
+            return
+        
+        is_new_file = not self.metrics_path.exists()
+        with self.metrics_path.open("a", newline ="") as f:
+            writer = csv.writer(f)
+            if is_new_file:
+                writer.writerow(["split", "epoch", "step", "loss"])
+            writer.writerow([split, epoch, step, loss])

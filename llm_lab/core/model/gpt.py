@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from torch import nn
 import torch
+from typing import Literal
 
 from llm_lab.core.model.blocks import TransformerBlock, TransformerBlockConfig
 
@@ -15,6 +16,12 @@ class MiniGPTConfig:
     d_ff: int
     block_size: int
     dropout: float = 0.0
+
+    norm_type: Literal["layernorm", "rmsnorm"] = "layernorm"
+    mlp_type: Literal["gelu", "swiglu"] = "gelu"
+    attention_type: Literal["mha", "mqa"] = "mha"
+
+    pos_encoding_type: Literal["learned", "sinusoidal", "rope"] = "learned"
 
 class MiniGPT(nn.Module):
     """
