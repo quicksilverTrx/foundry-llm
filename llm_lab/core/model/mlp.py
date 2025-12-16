@@ -7,7 +7,7 @@ import torch
 class FeedForwardConfig:
     d_model: int
     d_ff: int
-    dropout: int 
+    dropout: float 
 
 class FeedForward(nn.Module):
     def __init__(self,config :FeedForwardConfig):

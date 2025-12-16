@@ -34,7 +34,7 @@ class LanguageModelingDataset(Dataset):
         self.data = torch.tensor(ids,dtype = torch.long)
 
     def __len__(self):
-        return max(0,len(self.data.size(0))-self.block_size)
+        return max(0,(self.data.size(0))-self.block_size)
     
     def __getitem__(self, idx : int) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.data[idx : idx + self.block_size]

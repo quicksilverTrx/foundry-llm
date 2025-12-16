@@ -1,9 +1,10 @@
+#llm_lab/core/model/blocks
 from __future__ import annotations
 
 from dataclasses import dataclass
 from torch import nn
 import torch
-
+from typing import Optional
 from llm_lab.core.model.attention import MultiHeadAttention, MultiHeadAttentionConfig
 from llm_lab.core.model.mlp import FeedForward, FeedForwardConfig
 
@@ -13,6 +14,7 @@ class TransformerBlockConfig:
     n_heads: int
     d_ff: int
     dropout: float
+    use_rope: bool = False
 
 class TransformerBlock(nn.Module):
     def __init__(self,config: TransformerBlockConfig):
@@ -26,8 +28,9 @@ class TransformerBlock(nn.Module):
         #Attention Block
         attention_config = MultiHeadAttentionConfig(d_model=config.d_model,
                                                     n_heads=config.n_heads,
-                                                    dropout=config.dropout)
-        self.blocks = MultiHeadAttention(attention_config)
+                                                    dropout=config.dropout,
+                                                    use_rope=config.use_rope)
+        self.attn = MultiHeadAttention(attention_config)
 
         #FF Layer
         ff_config = FeedForwardConfig(d_model=config.d_model,
@@ -35,11 +38,11 @@ class TransformerBlock(nn.Module):
                                       dropout=config.dropout)
         self.mlp = FeedForward(ff_config)
     
-    def forward(self,x:torch.Tensor) -> torch.Tensor:
+    def forward(self,x:torch.Tensor,position_ids : Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         x: [B, T, d_model]
         """
-        h = x + self.blocks(self.ln1(x))
+        h = x + self.attn(self.ln1(x),position_ids=position_ids)
         y = h + self.mlp(self.ln2(h))
         return y
 

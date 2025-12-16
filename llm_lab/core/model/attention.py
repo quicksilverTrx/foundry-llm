@@ -7,12 +7,15 @@ from typing import Optional
 
 import torch
 from torch import nn
+from llm_lab.core.model.pos_encodings import apply_rope
 
 @dataclass
 class SingleHeadAttentionConfig:
     d_model : int
     head_dim : int
     dropout : float = 0.0
+    use_rope: bool = False 
+
 
 class SingleHeadAttention(nn.Module):
     """
@@ -29,6 +32,7 @@ class SingleHeadAttention(nn.Module):
         self.d_model = config.d_model
         self.head_dim = config.head_dim
         self.dropout_p = config.dropout
+        self.config = config
 
         # Linear projections: d_model -> head_dim
         self.q_proj = nn.Linear(self.d_model,self.head_dim)
@@ -50,7 +54,7 @@ class SingleHeadAttention(nn.Module):
         mask = torch.triu(mask,diagonal = 1)  # upper triangle (j > i) stays -inf; rest becomes 0
         return mask
     
-    def forward(self, x:torch.Tensor) -> torch.Tensor : 
+    def forward(self, x:torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor : 
         """
         x: [B, T, d_model]
         returns: [B, T, head_dim]
@@ -63,6 +67,13 @@ class SingleHeadAttention(nn.Module):
         assert q_val.shape == (B, T, self.head_dim)
         k_val = self.k_proj(x) # [B, T, head_dim]
         v_val = self.v_proj(x) # [B, T, head_dim]
+
+        if self.config.use_rope:
+            if position_ids is None:
+                raise ValueError("use_rope=True but position_ids=None")
+
+            q_val, k_val = apply_rope(q_val, k_val, position_ids)  # theta default is fine for base RoPE
+
         k_t = k_val.transpose(-2,-1) # [B,  head_dim, T]
 
 
@@ -87,6 +98,7 @@ class MultiHeadAttentionConfig:
     d_model: int
     n_heads: int
     dropout: float = 0.0
+    use_rope: bool = False 
 
 class MultiHeadAttention(nn.Module):
     """
@@ -103,7 +115,7 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = self.d_model//self.n_head
 
         # Each head has its own q/k/v projections
-        single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout)
+        single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope)
 
         self.heads = nn.ModuleList([SingleHeadAttention(single_head_config) for _ in range(self.n_head)])
         
@@ -111,7 +123,7 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(self.d_model,self.d_model)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self,x:torch.Tensor) -> torch.Tensor:
+    def forward(self,x:torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         x: [B, T, d_model]
         returns: [B, T, d_model]
@@ -122,7 +134,7 @@ class MultiHeadAttention(nn.Module):
         # Run each head independently, then concat along feature dim
         head_outputs = []
         for head in self.heads:
-            head_outputs.append(head(x))  # each [B, T, head_dim]
+            head_outputs.append(head(x, position_ids=position_ids))  # each [B, T, head_dim]
         head_outputs = torch.cat(head_outputs, dim=-1)  # # [B, T, n_heads * head_dim] = [B, T, d_model]
 
         projected_head = self.out_proj(head_outputs) # [B, T, d_model]
