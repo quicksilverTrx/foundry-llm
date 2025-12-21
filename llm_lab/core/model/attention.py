@@ -42,7 +42,7 @@ class SingleHeadAttention(nn.Module):
         # Dropout on attention probabilities
         self.dropout_p_layer = nn.Dropout(self.dropout_p)
 
-    def _causal_mask (self, T:int, device : torch.device) -> torch.Tensor :
+    def _causal_mask (self, T:int, device : torch.device, dtype = torch.float32) -> torch.Tensor :
         """
         Returns a [T, T] mask with -inf on positions j > i (future),
         0 on allowed positions.
@@ -50,7 +50,7 @@ class SingleHeadAttention(nn.Module):
           0      for j <= i (allowed: past + self)
           -inf   for j > i  (future positions)
         """
-        mask = torch.full((T,T),float("-inf"),device=device)
+        mask = torch.full((T,T),float(-1e9),device=device,dtype=dtype)
         mask = torch.triu(mask,diagonal = 1)  # upper triangle (j > i) stays -inf; rest becomes 0
         return mask
     

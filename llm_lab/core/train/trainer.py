@@ -7,7 +7,7 @@ from typing import Optional,Dict,Any
 from torch import nn
 from torch.utils.data import DataLoader
 import torch
-
+from pathlib import Path
 import csv
 from pathlib import Path
 
@@ -43,7 +43,7 @@ class Trainer:
 
         self.global_step = 0
         if config.log_dir is not None:
-            self.log_dir = config.log_dir
+            self.log_dir = Path(config.log_dir)
             self.log_dir.mkdir (parents = True, exist_ok = True)
             self.metrics_path = self.log_dir/"loss_curve.csv"
         else:

@@ -46,7 +46,7 @@ def sample_with_temperature(
     returns: [B, T + max_new_tokens]
     """
     model.eval() 
-    if temperature <0:
+    if temperature <= 0:
         raise ValueError ("temperature must be > 0")
 
     output_ids = input_ids
@@ -79,7 +79,7 @@ def sample_top_k(
     Top-k sampling: keep only k highest logits before sampling.
     """
     model.eval() 
-    if temperature <0:
+    if temperature <=0:
         raise ValueError ("temperature must be > 0")
 
     output_ids = input_ids
