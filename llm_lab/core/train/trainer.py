@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass,asdict
-from typing import Optional,Dict,Any
+from typing import Optional,Dict,Any,Callable
 
 from torch import nn
 from torch.utils.data import DataLoader
@@ -20,6 +20,7 @@ class TrainerConfig:
     log_dir: Optional[str] = None     
     log_every_n_steps: int = 100       
     num_epochs: int = 1                
+    sample_every_n_steps_multiple: Optional[int] = None
 
 class Trainer:
     def __init__(self,
@@ -35,6 +36,8 @@ class Trainer:
 
         self.device = torch.device(self.config.device)
         self.model.to(self.device)
+        print("Model device (after .to):", next(model.parameters()).device)
+    
         
         self.lr = self.config.lr
         self.optimizer = torch.optim.Adam(self.model.parameters(),lr=self.config.lr)
@@ -42,6 +45,9 @@ class Trainer:
         self.loss_fn = torch.nn.CrossEntropyLoss()
 
         self.global_step = 0
+        self.last_val_step = -1
+        self.last_sample_step = -1
+        self.sample_callback: Optional[Callable[[int, int], None]] = None
         if config.log_dir is not None:
             self.log_dir = Path(config.log_dir)
             self.log_dir.mkdir (parents = True, exist_ok = True)
@@ -77,6 +83,10 @@ class Trainer:
                     step=self.global_step,
                     loss=loss.item(),
                 )
+            val_loss = self._maybe_run_val(epoch_index=epoch_index)
+            if val_loss is not None:
+                self.model.train()
+            self._maybe_run_sample(epoch_index=epoch_index)
 
         return total_loss/len(self.train_loader)
     
@@ -107,6 +117,42 @@ class Trainer:
         else :
             return 0
     
+    def _maybe_run_val(self, epoch_index: int) -> Optional[float]:
+        if self.val_loader is None:
+            return None
+        interval = self.config.log_every_n_steps * 10
+        if interval <= 0:
+            return None
+        if (self.global_step % interval) != 0:
+            return None
+        if self.global_step == self.last_val_step:
+            return None
+        self.last_val_step = self.global_step
+        return self.evaluate(epoch_index=epoch_index)
+
+    def set_sample_callback(self, callback: Callable[[int, int], None]) -> None:
+        self.sample_callback = callback
+
+    def _maybe_run_sample(self, epoch_index: int) -> None:
+        if self.sample_callback is None:
+            return
+        multiple = self.config.sample_every_n_steps_multiple
+        if multiple is None or multiple <= 0:
+            return
+        interval = self.config.log_every_n_steps * multiple
+        if interval <= 0:
+            return
+        if (self.global_step % interval) != 0:
+            return
+        if self.global_step == self.last_sample_step:
+            return
+        self.last_sample_step = self.global_step
+        was_training = self.model.training
+        self.model.eval()
+        self.sample_callback(self.global_step, epoch_index)
+        if was_training:
+            self.model.train()
+
     def fit(self,num_epochs:Optional[int] = None) -> None : 
         if num_epochs is None:
             num_epochs = self.config.num_epochs

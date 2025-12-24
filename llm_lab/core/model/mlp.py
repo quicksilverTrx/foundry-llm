@@ -23,9 +23,9 @@ class FeedForward(nn.Module):
         x: [B, T, d_model]
         return: [B, T, d_model]
         """
-        x = self.fc1(x)
+        x = self.fc1(x)   # [B, T, d_model] -> [B, T, d_ff]   (EXPAND)
         x = self.act(x)
         x = self.dropout(x)
-        x = self.fc2(x)
+        x = self.fc2(x) # [B, T, d_ff]    -> [B, T, d_model] (CONTRACT)
         x = self.dropout(x)
         return x
