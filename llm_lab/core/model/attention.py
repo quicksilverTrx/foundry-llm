@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass 
-from typing import Optional
-
+from typing import Literal,Optional,List,Tuple
 import torch
 from torch import nn
 from llm_lab.core.model.pos_encodings import apply_rope
+PastKeyValue = Tuple[torch.Tensor, torch.Tensor]
+PastKeyValues = List[PastKeyValue] # len == n_layers (model-level)
+
 
 @dataclass
 class SingleHeadAttentionConfig:
@@ -54,7 +56,8 @@ class SingleHeadAttention(nn.Module):
         mask = torch.triu(mask,diagonal = 1)  # upper triangle (j > i) stays -inf; rest becomes 0
         return mask
     
-    def forward(self, x:torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor : 
+    def forward(self, x:torch.Tensor, position_ids: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None, past_key_value : Optional[PastKeyValue] = None, use_cache = False) -> Tuple[torch.Tensor,Optional[PastKeyValue]]:  
         """
         x: [B, T, d_model]
         returns: [B, T, head_dim]
@@ -82,7 +85,7 @@ class SingleHeadAttention(nn.Module):
         assert attention_weights.shape == (B, T, T)
 
          # Apply causal mask so each position sees only <= its index
-        mask = self._causal_mask(T,x.device) # [T, T]
+        mask = self._causal_mask(T,x.device,dtype=attention_weights.dtype) # [T, T]
         attention_weights_masked = attention_weights + mask # [B, T, T] + [T, T] (broadcast) -> [B, T, T]
         
         # Turn scores into probabilities over positions j
@@ -91,7 +94,7 @@ class SingleHeadAttention(nn.Module):
         
         # Weighted sum of value vectors → new representation
         y_t = attention_weights_probability@ v_val # [B, T, T] * [B, T, head_dim] =  [B, T, head_dim]
-        return y_t
+        return y_t,None
 
 @dataclass
 class MultiHeadAttentionConfig:
@@ -123,7 +126,8 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(self.d_model,self.d_model)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self,x:torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self,x:torch.Tensor, position_ids: Optional[torch.Tensor] = None,
+                attention_mask : Optional[torch.Tensor]= None, past_key_value : Optional[PastKeyValue] = None, use_cache = False) -> Tuple[torch.Tensor,Optional[PastKeyValue]]:
         """
         x: [B, T, d_model]
         returns: [B, T, d_model]
@@ -134,9 +138,10 @@ class MultiHeadAttention(nn.Module):
         # Run each head independently, then concat along feature dim
         head_outputs = []
         for head in self.heads:
-            head_outputs.append(head(x, position_ids=position_ids))  # each [B, T, head_dim]
+            attention_outputs,_ = head(x, position_ids=position_ids,attention_mask = attention_mask ,past_key_value = past_key_value ,use_cache = use_cache)  # each [B, T, head_dim]
+            head_outputs.append(attention_outputs) 
         head_outputs = torch.cat(head_outputs, dim=-1)  # # [B, T, n_heads * head_dim] = [B, T, d_model]
 
         projected_head = self.out_proj(head_outputs) # [B, T, d_model]
         y = self.dropout(projected_head)
-        return y
+        return y,None
