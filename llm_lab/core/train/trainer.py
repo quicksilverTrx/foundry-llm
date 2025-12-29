@@ -47,6 +47,8 @@ class Trainer:
         self.global_step = 0
         self.last_val_step = -1
         self.last_sample_step = -1
+        self.last_train_logged_loss: Optional[float] = None
+        self.last_val_logged_loss: Optional[float] = None
         self.sample_callback: Optional[Callable[[int, int], None]] = None
         if config.log_dir is not None:
             self.log_dir = Path(config.log_dir)
@@ -67,16 +69,17 @@ class Trainer:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
             self.optimizer.zero_grad()
-            outputs = self.model(inputs) # [B, T, vocab_size]
+            outputs,_ = self.model(inputs,attention_mask = None, past_key_values = None, use_cache = False) # [B, T, vocab_size]
             B, T, V = outputs.shape
-            outputs_flat = outputs.view(B*T,V)
-            labels_flat = labels.view(B*T)
+            outputs_flat = outputs.reshape(B*T,V)
+            labels_flat = labels.reshape(B*T)
             loss = self.loss_fn(outputs_flat,labels_flat)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.config.max_grad_norm)
             self.optimizer.step()
             total_loss +=loss.item()
             if (self.global_step % self.config.log_every_n_steps) == 0:
+                self.last_train_logged_loss = float(loss.item())
                 self._log_metrics(
                     split="train",
                     epoch=epoch_index,
@@ -100,13 +103,14 @@ class Trainer:
                     inputs, labels = data
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                    outputs = self.model(inputs)
+                    outputs ,_= self.model(inputs,attention_mask = None, past_key_values = None, use_cache = False) 
                     B,T,V = outputs.shape
-                    outputs_flat = outputs.view(B*T,V)
-                    labels_flat = labels.view(B*T)
+                    outputs_flat = outputs.reshape(B*T,V)
+                    labels_flat = labels.reshape(B*T)
                     loss = self.loss_fn(outputs_flat,labels_flat)
                     eval_loss += loss.item()
             avg_loss = eval_loss / len(self.val_loader)   
+            self.last_val_logged_loss = float(avg_loss)
             self._log_metrics(
                 split="val",
                 epoch=epoch_index,
@@ -160,10 +164,10 @@ class Trainer:
         for i in range(num_epochs):
             training_loss_per_batch=self.train_epoch(epoch_index=i)
             eval_loss_per_batch=self.evaluate(epoch_index=i)
-            if i % 10 == 0 :
-                print(f"training loss per batch at epoch {i} is {training_loss_per_batch}")
-                print(f"Eval loss per batch at epoch {i} is {eval_loss_per_batch}")
-    
+            print(f"[epoch {i}] train_epoch_avg_loss={training_loss_per_batch:.4f} "
+                  f"val_epoch_avg_loss={eval_loss_per_batch:.4f} "
+                  f"last_train_logged={self.last_train_logged_loss} "
+                  f"last_val_logged={self.last_val_logged_loss}")
     def save_checkpoint(self, path: str) -> None:
         check_point = {"model_state":self.model.state_dict(),
                        "optimizer_state": self.optimizer.state_dict(),

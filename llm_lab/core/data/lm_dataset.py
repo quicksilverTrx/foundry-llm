@@ -1,7 +1,7 @@
 # llm_lab/core/data/lm_dataset.py
 from __future__ import annotations
 
-from typing import Sequence,Tuple,Union
+from typing import Sequence,Tuple,Union, Optional
 from torch.utils.data import Dataset
 import torch
 from llm_lab.core.tokenization import SubwordTokenizer
@@ -18,19 +18,23 @@ class LanguageModelingDataset(Dataset):
             self,
             text: Union[str, Sequence[str]],
             tokenizer: SubwordTokenizer,
-            block_size: int) -> None:
+            block_size: int,
+            token_ids: Optional[Sequence[int]] = None) -> None:
         assert block_size > 0 
         super().__init__()
         self.tokenizer = tokenizer
         self.block_size = block_size
         
-        if(isinstance(text,str)):
-            ids = self.tokenizer.encode(text)
+        if token_ids is not None:
+            ids = list(token_ids)
         else:
-            all_ids = []
-            for t in text:
-                all_ids.extend(self.tokenizer.encode(t))
-            ids = all_ids
+            if(isinstance(text,str)):
+                ids = self.tokenizer.encode(text)
+            else:
+                all_ids = []
+                for t in text:
+                    all_ids.extend(self.tokenizer.encode(t))
+                ids = all_ids
         self.data = torch.tensor(ids,dtype = torch.long)
 
     def __len__(self):

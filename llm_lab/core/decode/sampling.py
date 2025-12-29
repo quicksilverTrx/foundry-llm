@@ -25,7 +25,7 @@ def greedy_decode(
             cur_ids = output_ids[:,-block_size:] # B,block_size
         else:
             cur_ids = output_ids # [B, T_cur]
-        logits = model(cur_ids) ##[B,T_cur,V]
+        logits, _ = model(cur_ids, attention_mask = None, past_key_values = None, use_cache = False) #[B,T_cur,V]
         logits_last = logits[:,-1,:] #[B,V]
         next_token_greedy = torch.argmax(logits_last,dim=-1,keepdim=True) # [B, 1]
         output_ids = torch.cat([output_ids,next_token_greedy],dim=1) # [B, T_cur+1]
@@ -56,7 +56,7 @@ def sample_with_temperature(
             cur_ids = output_ids[:,-block_size:] # B,block_size
         else:
             cur_ids = output_ids # [B, T_cur]
-        logits = model(cur_ids) #[B,T_cur,V]
+        logits, _ = model(cur_ids, attention_mask = None, past_key_values = None, use_cache = False) #[B,T_cur,V]
         logits_last = logits[:,-1,:] #[B,V]
         logits_scaled  = logits_last/temperature
         probs = torch.softmax(logits_scaled,dim=-1)  #[B,V]
@@ -89,7 +89,7 @@ def sample_top_k(
             cur_ids = output_ids[:,-block_size:] # B,block_size
         else:
             cur_ids = output_ids # [B, T_cur]
-        logits = model(cur_ids) #[B,block_size,V]
+        logits, _ = model(cur_ids, attention_mask = None, past_key_values = None, use_cache = False) #[B,block_size,V]
         logits_last = logits[:,-1,:] #[B,V]
         logits_scaled  = logits_last/temperature
 
@@ -146,7 +146,7 @@ def sample_top_p(
         else:
             cur_ids = output_ids                    # [B, T_cur]
 
-        logits = model(cur_ids)                     # [B, T_cur, V]
+        logits , _ = model(cur_ids, attention_mask = None, past_key_values = None, use_cache = False)  # [B, T_cur, V]
         last_logits = logits[:, -1, :]              # [B, V]
 
         # Temperature scaling

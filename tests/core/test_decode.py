@@ -38,7 +38,7 @@ def test_greedy_decode_length_and_range():
     assert (y < cfg.vocab_size).all() #within vocab limits
 
     with torch.no_grad():
-        logits = m(x)   # [B, T, V]
+        logits,_ = m(x)   # [B, T, V]
         last_logits = logits[:,-1,:] # [B, V]
         last_tokens = last_logits.argmax(dim=-1) # [B]
     assert torch.equal(y[:,x_len],last_tokens)
