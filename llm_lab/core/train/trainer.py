@@ -22,6 +22,9 @@ class TrainerConfig:
     num_epochs: int = 1                
     sample_every_n_steps_multiple: Optional[int] = None
 
+    max_steps: Optional[int] = None          # stop after N optimizer steps
+    eval_every_n_steps: Optional[int] = None # if set, run val eval periodically
+
 class Trainer:
     def __init__(self,
                  model : nn.Module,
@@ -64,7 +67,6 @@ class Trainer:
         if len(self.train_loader) <=0 :
             raise ValueError ("train_loader is empty")
         for i, data in enumerate(self.train_loader):
-            self.global_step += 1
             inputs, labels = data
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
@@ -77,6 +79,9 @@ class Trainer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.config.max_grad_norm)
             self.optimizer.step()
+            self.global_step += 1
+            if self.config.max_steps is not None and self.global_step >= self.config.max_steps:
+                break
             total_loss +=loss.item()
             if (self.global_step % self.config.log_every_n_steps) == 0:
                 self.last_train_logged_loss = float(loss.item())
@@ -163,6 +168,16 @@ class Trainer:
 
         for i in range(num_epochs):
             training_loss_per_batch=self.train_epoch(epoch_index=i)
+            # If we ran out of steps during training, still do one final eval then stop.
+            if self.config.max_steps is not None and self.global_step >= self.config.max_steps:
+                eval_loss_per_batch = self.evaluate(epoch_index=i)
+                print(
+                    f"[epoch {i}] train_epoch_avg_loss={training_loss_per_batch:.4f} "
+                    f"val_epoch_avg_loss={eval_loss_per_batch:.4f} "
+                    f"last_train_logged={self.last_train_logged_loss} "
+                    f"last_val_logged={self.last_val_logged_loss}"
+                )
+                return
             eval_loss_per_batch=self.evaluate(epoch_index=i)
             print(f"[epoch {i}] train_epoch_avg_loss={training_loss_per_batch:.4f} "
                   f"val_epoch_avg_loss={eval_loss_per_batch:.4f} "

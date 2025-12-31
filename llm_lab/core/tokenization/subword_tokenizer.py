@@ -63,6 +63,8 @@ class SubwordTokenizer:
         merges: List[Pair] = []
         # 2) Iteratively pick and merge the most frequent pair
         while len(vocab) < config.vocab_size:
+            if len(vocab) %100 ==0:
+                print(f"Length of vocabulary is {len(vocab)}")
             pair_counts = cls._count_pairs(corpus_words)
             if not pair_counts:
                 break
