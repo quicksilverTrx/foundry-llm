@@ -10,7 +10,8 @@ from llm_lab.core.model.pos_encodings import apply_rope
 PastKeyValue = Tuple[torch.Tensor, torch.Tensor]
 PastKeyValues = List[PastKeyValue] # len == n_layers (model-level)
 
-
+_CAUSAL_MASK_CACHE = {} # # key: (T, str(device), dtype) -> Tensor[T,T]
+USE_CACHE = True
 @dataclass
 class SingleHeadAttentionConfig:
     d_model : int
@@ -43,6 +44,7 @@ class SingleHeadAttention(nn.Module):
 
         # Dropout on attention probabilities
         self.dropout_p_layer = nn.Dropout(self.dropout_p)
+        self.scale = self.head_dim ** -0.5
 
     def _causal_mask (self, T:int, device : torch.device, dtype = torch.float32) -> torch.Tensor :
         """
@@ -52,9 +54,21 @@ class SingleHeadAttention(nn.Module):
           0      for j <= i (allowed: past + self)
           -inf   for j > i  (future positions)
         """
-        mask = torch.full((T,T),float(-1e9),device=device,dtype=dtype)
-        mask = torch.triu(mask,diagonal = 1)  # upper triangle (j > i) stays -inf; rest becomes 0
-        return mask
+        if USE_CACHE:
+            key = (T, str(device), dtype)
+
+            m = _CAUSAL_MASK_CACHE.get(key)
+            if m is None:
+                neg = torch.finfo(dtype).min
+                mask = torch.full((T, T), float(neg), device=device, dtype=dtype)
+                mask = torch.triu(mask, diagonal=1)
+                _CAUSAL_MASK_CACHE[key] = mask
+                m = mask
+            return m
+        else:
+            mask = torch.full((T, T), float(-1e9), device=device, dtype=dtype)
+            mask = torch.triu(mask, diagonal=1) 
+            return mask
     
     def forward(self, x:torch.Tensor, position_ids: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None, past_key_value : Optional[PastKeyValue] = None, use_cache = False) -> Tuple[torch.Tensor,Optional[PastKeyValue]]:  
@@ -79,9 +93,9 @@ class SingleHeadAttention(nn.Module):
 
         k_t = k_val.transpose(-2,-1) # [B,  head_dim, T]
 
-
+        
         attention_weights = q_val @ k_t  # [B, T, T]
-        attention_weights = attention_weights/(self.head_dim ** 0.5) # [B, T, T]
+        attention_weights = attention_weights*(self.scale) # [B, T, T]
         assert attention_weights.shape == (B, T, T)
 
          # Apply causal mask so each position sees only <= its index
@@ -89,7 +103,8 @@ class SingleHeadAttention(nn.Module):
         attention_weights_masked = attention_weights + mask # [B, T, T] + [T, T] (broadcast) -> [B, T, T]
         
         # Turn scores into probabilities over positions j
-        attention_weights_probability = nn.Softmax(dim=-1)(attention_weights_masked) # dim=-1 to normalize over the “which position to attend to” dimension.
+        #attention_weights_probability = nn.Softmax(dim=-1)(attention_weights_masked) # dim=-1 to normalize over the “which position to attend to” dimension.
+        attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
         attention_weights_probability = self.dropout_p_layer(attention_weights_probability) 
         
         # Weighted sum of value vectors → new representation
@@ -101,7 +116,7 @@ class MultiHeadAttentionConfig:
     d_model: int
     n_heads: int
     dropout: float = 0.0
-    use_rope: bool = False 
+    use_rope: bool = False
 
 class MultiHeadAttention(nn.Module):
     """
@@ -117,6 +132,7 @@ class MultiHeadAttention(nn.Module):
         self.n_head = config.n_heads
         self.head_dim = self.d_model//self.n_head
 
+        self.config = config
         # Each head has its own q/k/v projections
         single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope)
 

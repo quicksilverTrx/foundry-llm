@@ -1,7 +1,7 @@
 # foundry-llm
 
 An experimental, minimal GPT-style language model lab for learning and iterating on
-decoder-only Transformers. 
+decoder-only Transformers.
 
 ## Highlights
 - MiniGPT: decoder-only Transformer with multi-head attention (MHA)
@@ -20,9 +20,13 @@ decoder-only Transformers.
 - `llm_lab/core/train`: `Trainer` + `TrainerConfig`
 - `llm_lab/core/decode`: sampling helpers
 - `llm_lab/core/package`: package layout + IO helpers
+- `llm_lab/utils`: config loading and misc utilities
 - `scripts/`: runnable experiments and sampling entry points
 - `configs/`: example model config JSON
 - `tests/`: unit and smoke tests
+- `data/`: local text corpora (expected by training scripts)
+- `experiments/`: local run outputs (logs, checkpoints, analysis)
+- `artifacts/`: packaged models (config + tokenizer + checkpoints)
 
 ## Setup
 Requirements:
@@ -60,6 +64,14 @@ Character-level:
 
 Subword (BPE):
 - `python scripts/p2_train_bpe.py`: train BPE tokenizer, build LM datasets, train MiniGPT, save package
+
+Positional encodings:
+- `python scripts/p3_train_posenc.py`: compare learned, sinusoidal, and RoPE configs
+
+Benchmarks / analysis:
+- `python scripts/p1_bench_attention.py`: attention performance micro-benchmark
+- `python scripts/p1_bench_step.py`: single-step throughput benchmark
+- `python scripts/p1_collect_phase4_numbers.py`: collect run metrics for reporting
 
 ## Sampling scripts
 Character-level:
@@ -107,8 +119,10 @@ Package layout:
 ```
 
 ## Configuration
-Example config:
+Example configs:
 - `configs/p1/gpt_small_subword.json`
+- `configs/p1/gpt_small_rope.json`
+- `configs/p1/gpt_small_sinusoidal.json`
 
 You can load JSON configs into dataclasses with:
 ```python
@@ -128,5 +142,3 @@ pytest
 - `attention_mask` and KV cache are stubbed; they raise `NotImplementedError`
 - Only MHA is implemented (`attention_type` is a placeholder for now)
 - BPE tokenizer is a simple, educational implementation (not SentencePiece)
-
-
