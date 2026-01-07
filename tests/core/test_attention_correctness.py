@@ -19,9 +19,8 @@ def test_causal_mask_values(T):
     _clear_mask_cache()
     _set_use_cache(True)
 
-    cfg = SingleHeadAttentionConfig(d_model=8, head_dim=4, dropout=0.0, use_rope=False)
-    m = SingleHeadAttention(cfg)
-    mask = m._causal_mask(T, device=torch.device("cpu"), dtype=torch.float32)
+    # NOTE: _causal_mask is now module-level (not on SingleHeadAttention)
+    mask = attn_mod._causal_mask(T, device=torch.device("cpu"), dtype=torch.float32)
 
     assert mask.shape == (T, T)
 
@@ -37,22 +36,20 @@ def test_mask_cache_keyed_by_T_device_dtype():
     _clear_mask_cache()
     _set_use_cache(True)
 
-    cfg = SingleHeadAttentionConfig(d_model=8, head_dim=4, dropout=0.0, use_rope=False)
-    m = SingleHeadAttention(cfg)
-
     # same call should reuse
-    _ = m._causal_mask(8, torch.device("cpu"), torch.float32)
+    _ = attn_mod._causal_mask(8, torch.device("cpu"), torch.float32)
     n1 = len(attn_mod._CAUSAL_MASK_CACHE)
-    _ = m._causal_mask(8, torch.device("cpu"), torch.float32)
+
+    _ = attn_mod._causal_mask(8, torch.device("cpu"), torch.float32)
     n2 = len(attn_mod._CAUSAL_MASK_CACHE)
     assert n2 == n1
 
     # different T should add
-    _ = m._causal_mask(16, torch.device("cpu"), torch.float32)
+    _ = attn_mod._causal_mask(16, torch.device("cpu"), torch.float32)
     assert len(attn_mod._CAUSAL_MASK_CACHE) == n1 + 1
 
     # different dtype should add (float16 mask creation is fine on CPU)
-    _ = m._causal_mask(8, torch.device("cpu"), torch.float16)
+    _ = attn_mod._causal_mask(8, torch.device("cpu"), torch.float16)
     assert len(attn_mod._CAUSAL_MASK_CACHE) == n1 + 2
 
 def test_single_head_cache_on_off_equivalence_eval():

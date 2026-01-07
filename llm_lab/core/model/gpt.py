@@ -23,7 +23,7 @@ class MiniGPTConfig:
 
     norm_type: Literal["layernorm", "rmsnorm"] = "layernorm"
     mlp_type: Literal["gelu", "swiglu"] = "gelu"
-    attention_type: Literal["mha", "mqa"] = "mha"
+    attention_type: Literal["mha", "gqa"] = "mha"
 
     pos_encoding_type: Literal["learned", "sinusoidal", "rope"] = "learned"
 
@@ -51,7 +51,8 @@ class MiniGPT(nn.Module):
             dropout=config.dropout,
             norm_type=config.norm_type,
             mlp_type=config.mlp_type,
-            use_rope= (config.pos_encoding_type=="rope")
+            use_rope= (config.pos_encoding_type=="rope"),
+            attention_type = config.attention_type
 
         )
 

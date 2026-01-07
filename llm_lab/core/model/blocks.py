@@ -20,7 +20,7 @@ class TransformerBlockConfig:
     use_rope: bool = False
     norm_type: Literal["layernorm", "rmsnorm"] = "layernorm"
     mlp_type: Literal ["swiglu","gelu"] = "gelu"
-
+    attention_type :  Literal["mha", "gqa"] = "mha"
 
 
 class TransformerBlock(nn.Module):
@@ -37,7 +37,8 @@ class TransformerBlock(nn.Module):
         attention_config = MultiHeadAttentionConfig(d_model=config.d_model,
                                                     n_heads=config.n_heads,
                                                     dropout=config.dropout,
-                                                    use_rope=config.use_rope)
+                                                    use_rope=config.use_rope,
+                                                    attention_type = config.attention_type)
         self.attn = MultiHeadAttention(attention_config)
 
         #FF Layer
