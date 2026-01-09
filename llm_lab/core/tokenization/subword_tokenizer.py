@@ -4,11 +4,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence, Dict, Optional, Literal, Union, Tuple, Iterable
+import json
+import re
 
 Symbol = str
 Pair = Tuple[Symbol, Symbol]
 PathLike = Union[str, Path]
+RESERVED_SPECIAL_TOKENS: Dict[str, int] = {
+    "<|pad|>": 0,
+    "<|user|>": 1,
+    "<|assistant|>": 2,
+    "<|endoftext|>": 3,
+}
+ID2SPECIAL = {i: s for s, i in RESERVED_SPECIAL_TOKENS.items()}
+SPECIAL_RE = re.compile(r"<\|[^|]+?\|>")  
+_BASIC_TOKEN_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?|\d+|[^\w\s]+", re.UNICODE)
 
+def _pretokenize(text:str) -> List[str]:
+    out : List[str] = []
+    i = 0
+    for m in SPECIAL_RE.finditer(text):
+        left = text[i:m.start()]
+        out.extend(_BASIC_TOKEN_RE.findall(left))
+        out.append(m.group(0))
+        i = m.end()
+    out.extend(_BASIC_TOKEN_RE.findall(text[i:]))
+    return [t for t in out if t and not t.isspace()]
 
 @dataclass
 class SubwordTokenizerConfig:
@@ -46,6 +67,15 @@ class SubwordTokenizer:
         self.merges: List[Pair] = list(merges) if merges is not None else []
         self.pair2rank: Dict[Pair, int] = {pair: i for i, pair in enumerate(self.merges)}
 
+    def token_to_id(self, tok: str) -> int:
+        return self.stoi[tok]
+
+    def id_to_token(self, idx: int) -> str:
+        return self.itos[idx]
+
+    def is_special(self, tok: str) -> bool:
+        return tok in RESERVED_SPECIAL_TOKENS
+    
 
     @classmethod
     def train_from_iterator(
@@ -57,11 +87,11 @@ class SubwordTokenizer:
         Train a simple char-level BPE tokenizer from an in-memory collection
         of texts.
         """
-        # 1) Build initial corpus (list of word-symbol sequences) + vocab
+        # Build initial corpus (list of word-symbol sequences) + vocab
         corpus_words, vocab = cls._build_initial_corpus(texts)
 
         merges: List[Pair] = []
-        # 2) Iteratively pick and merge the most frequent pair
+        #Iteratively pick and merge the most frequent pair
         while len(vocab) < config.vocab_size:
             if len(vocab) %100 ==0:
                 print(f"Length of vocabulary is {len(vocab)}")
@@ -79,8 +109,17 @@ class SubwordTokenizer:
 
             cls._merge_pair_in_corpus(corpus_words, best_pair, new_symbol)
 
-        # 3) Build vocab -> ids mapping in a deterministic order
-        symbols = sorted(vocab)
+        #Build vocab -> ids mapping in a deterministic order
+        reserved_items = sorted(RESERVED_SPECIAL_TOKENS.items(),key = lambda kv : kv[1])
+        reserved_syms = [s for s,_ in reserved_items]
+
+
+        learned_vocab = sorted(sym for sym in vocab if sym not in RESERVED_SPECIAL_TOKENS)
+        symbols = reserved_syms + learned_vocab
+        for s,idx in RESERVED_SPECIAL_TOKENS.items():
+            assert symbols[idx] == s, (s,idx,symbols[idx])
+
+
         stoi = {sym: i for i, sym in enumerate(symbols)}
         itos = {i: sym for sym, i in stoi.items()}
 
@@ -124,14 +163,15 @@ class SubwordTokenizer:
         Simple whitespace tokenization: split on spaces, then apply BPE per word.
         """
         ids: List[int] = []
-        for word in text.split():
-            if not word:
+        for tok in _pretokenize(text):
+            if tok in RESERVED_SPECIAL_TOKENS:
+                ids.append(self.stoi[tok])
                 continue
-            for sym in self._bpe_encode_word(word):
+
+            for sym in self._bpe_encode_word(tok):
                 try:
                     ids.append(self.stoi[sym])
                 except KeyError:
-                    # For P1: fail loudly if unseen chars appear at inference time.
                     raise KeyError(f"Unknown BPE symbol {sym!r}") from None
         return ids
 
@@ -145,6 +185,13 @@ class SubwordTokenizer:
         current = ""
 
         for sym in symbols:
+            if sym in RESERVED_SPECIAL_TOKENS:
+                if current:
+                    words.append(current)
+                    current = ""
+                words.append(sym)
+                continue
+
             if sym.endswith("</w>"):
                 current += sym[: -len("</w>")]
                 words.append(current)
@@ -186,10 +233,16 @@ class SubwordTokenizer:
         vocab: set[Symbol] = set()
 
         for text in texts:
-            for word in text.split():
-                if not word:
+            for tok in _pretokenize(text):
+                if not tok:
                     continue
-                chars = list(word)
+                if tok in RESERVED_SPECIAL_TOKENS:
+                    corpus_words.append([tok])
+                    vocab.add(tok)
+                    continue
+
+
+                chars = list(tok)
                 chars[-1] = chars[-1] + "</w>"  # attach end-of-word marker
                 corpus_words.append(chars)
                 vocab.update(chars)
@@ -291,8 +344,7 @@ class SubwordTokenizer:
         vocab_path = Path(vocab_path)
         symbols = [self.itos[i] for i in range(len(self.itos))]
         with vocab_path.open("w", encoding="utf-8") as f:
-            for sym in symbols:
-                f.write(sym + "\n")
+            json.dump(symbols, f, ensure_ascii=False, indent=2)
 
     def _save_merges(self, merges_path: PathLike) -> None:
         merges_path = Path(merges_path)
@@ -303,12 +355,10 @@ class SubwordTokenizer:
     @staticmethod
     def _load_vocab(vocab_path: PathLike) -> List[Symbol]:
         vocab_path = Path(vocab_path)
-        symbols: List[Symbol] = []
         with vocab_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                tok = line.rstrip("\n")
-                if tok:
-                    symbols.append(tok)
+            symbols = json.load(f)
+        if not isinstance(symbols, list) or not all(isinstance(s, str) for s in symbols):
+            raise ValueError("vocab.json must be a JSON list of strings (symbols in ID order).")
         return symbols
 
     @staticmethod
