@@ -24,13 +24,43 @@ class MiniGPTConfig:
     norm_type: Literal["layernorm", "rmsnorm"] = "layernorm"
     mlp_type: Literal["gelu", "swiglu"] = "gelu"
     attention_type: Literal["mha", "gqa"] = "mha"
+    num_kv_heads: Optional[int] = None
 
     pos_encoding_type: Literal["learned", "sinusoidal", "rope"] = "learned"
+    rope_scaling_type: Literal["none", "linear"] = "none"
+    rope_scaling_factor: float = 1.0
+    arch_family :Literal["miniGPT","nanollama"] = "miniGPT"
+
+    def __post_init__(self):
+        if self.attention_type == "gqa":
+            if self.num_kv_heads is None:
+                raise ValueError("GQA requires num_kv_heads")
+            if not (1 <= self.num_kv_heads <= self.n_heads):
+                raise ValueError("num_kv_heads out of range")
+            if self.n_heads % self.num_kv_heads != 0:
+                raise ValueError("n_heads must be divisible by num_kv_heads")
+
+        if self.arch_family == "nanollama":
+            if self.attention_type != "gqa":
+                raise ValueError("nanollama requires attention_type='gqa'")
+            if self.pos_encoding_type != "rope":
+                raise ValueError("nanollama requires pos_encoding_type='rope'")
+            if self.norm_type != "rmsnorm":
+                raise ValueError("nanollama requires norm_type='rmsnorm'")
+
+
+        if self.pos_encoding_type == "rope":
+            if self.rope_scaling_factor <= 0:
+                raise ValueError("rope_scaling_factor must be > 0")
+            if self.rope_scaling_type == "linear" and self.rope_scaling_factor < 1.0:
+                raise ValueError("rope_scaling_factor must be >= 1 for linear scaling")
+
+
 
 
 class MiniGPT(nn.Module):
     """
-    Char-level GPT-style decoder.
+    subword tokenizer, reserved tokens, RoPE, GQA powered GPT-style decoder.
     """
     def __init__(self,config: MiniGPTConfig):
         super().__init__()
@@ -52,7 +82,10 @@ class MiniGPT(nn.Module):
             norm_type=config.norm_type,
             mlp_type=config.mlp_type,
             use_rope= (config.pos_encoding_type=="rope"),
-            attention_type = config.attention_type
+            attention_type = config.attention_type,
+            num_kv_heads=config.num_kv_heads,
+            rope_scaling_factor=config.rope_scaling_factor,
+            rope_scaling_type = config.rope_scaling_type
 
         )
 

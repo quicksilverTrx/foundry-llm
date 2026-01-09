@@ -17,7 +17,19 @@ from llm_lab.core.package.layout import (
     checkpoints_dir,
     best_checkpoint_path,
 )
+NANOLLAMA_DEFAULTS = {
+    "norm_type": "rmsnorm",
+    "mlp_type": "swiglu",
+    "pos_encoding_type": "rope",
+    "attention_type": "gqa",
+}
 
+def _apply_arch_family_defaults(raw: dict) -> dict:
+    arch = raw.get("arch_family", "miniGPT")
+    if arch == "nanollama":
+        for k, v in NANOLLAMA_DEFAULTS.items():
+            raw.setdefault(k, v)
+    return raw
 
 def save_model_package(
     package_dir: Union[str, Path],
@@ -80,6 +92,7 @@ def load_model_package(
     config_path = pkg / MODEL_CONFIG_FILENAME
     with config_path.open("r", encoding="utf-8") as f:
         raw_cfg = json.load(f)
+    raw_cfg = _apply_arch_family_defaults(raw_cfg)
     config = MiniGPTConfig(**raw_cfg)
 
 

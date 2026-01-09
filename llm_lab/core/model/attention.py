@@ -27,7 +27,7 @@ def _causal_mask ( T:int, device : torch.device, dtype = torch.float32) -> torch
         m = _CAUSAL_MASK_CACHE.get(key)
         if m is None:
             neg = torch.finfo(dtype).min
-            mask = torch.full((T, T), float(neg), device=device, dtype=dtype)
+            mask = torch.full((T, T), (neg), device=device, dtype=dtype)
             mask = torch.triu(mask, diagonal=1)
             _CAUSAL_MASK_CACHE[key] = mask
             m = mask
@@ -61,6 +61,8 @@ class SingleHeadAttentionConfig:
     head_dim : int
     dropout : float = 0.0
     use_rope: bool = False 
+    rope_scaling_type: Literal["none", "linear"] = "none"
+    rope_scaling_factor: float = 1.0 
 
 
 class SingleHeadAttention(nn.Module):
@@ -110,7 +112,10 @@ class SingleHeadAttention(nn.Module):
             if position_ids is None:
                 raise ValueError("use_rope=True but position_ids=None")
 
-            q_val, k_val = apply_rope(q_val, k_val, position_ids)  # theta default is fine for base RoPE
+            q_val, k_val = apply_rope(q_val, k_val, position_ids,
+                                      rope_scaling_type=self.config.rope_scaling_type,
+                                      rope_scaling_factor=self.config.rope_scaling_factor,
+                                      position_offset=0,)  # theta default is fine for base RoPE
 
         k_t = k_val.transpose(-2,-1) # [B,  head_dim, T]
 
@@ -142,6 +147,8 @@ class MultiHeadAttentionConfig:
     use_rope: bool = False
     attention_type: Literal["mha", "gqa"] = "mha"
     num_kv_heads: Optional[int] = None
+    rope_scaling_type: Literal["none", "linear"] = "none"
+    rope_scaling_factor: float = 1.0
 
 class MultiHeadAttention(nn.Module):
     """
@@ -158,9 +165,12 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = self.d_model//self.n_head
         self.attention_type = config.attention_type
         self.config = config
+        
         # Each head has its own q/k/v projections
         if self.attention_type == "mha":
-            single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope)
+            single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope,
+                                                           rope_scaling_type=config.rope_scaling_type,
+                                                        rope_scaling_factor=config.rope_scaling_factor)
 
             self.heads = nn.ModuleList([SingleHeadAttention(single_head_config) for _ in range(self.n_head)])
             
@@ -235,7 +245,10 @@ class MultiHeadAttention(nn.Module):
 
                 q_batched = q.reshape(B*H,T,D)
                 k_batched = k.reshape(B*H,T,D)
-                q, k = apply_rope(q_batched, k_batched, position_ids)  # theta default is fine for base RoPE
+                q, k = apply_rope(q_batched, k_batched, position_ids,
+                                  rope_scaling_type=self.config.rope_scaling_type,
+                                    rope_scaling_factor=self.config.rope_scaling_factor,
+                                    position_offset=0)  # theta default is fine for base RoPE
                 q = q.reshape(B,H,T,D)
                 k = k.reshape(B,H,T,D)
 

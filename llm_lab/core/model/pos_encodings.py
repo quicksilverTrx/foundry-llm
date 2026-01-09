@@ -50,18 +50,43 @@ def apply_rope(q: torch.Tensor,  # [B, T, head_dim]
     position_ids: torch.Tensor,  # [T] 
     *,
     theta: float = 10000.0,
+    rope_scaling_type: str = "none",      # "none" | "linear"
+    rope_scaling_factor: float = 1.0,     # >1 extends context
+    position_offset: int = 0,             # KV-cache ready
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    if rope_scaling_factor <= 0:
+        raise ValueError("rope_scaling_factor must be > 0")
+    if rope_scaling_type not in {"none", "linear"}:
+        raise ValueError(f"rope_scaling_type must be 'none' or 'linear', got {rope_scaling_type!r}")
+    if rope_scaling_type == "linear" and rope_scaling_factor < 1.0:
+        raise ValueError("rope_scaling_factor must be >= 1.0 for linear scaling")
+
+    if q.shape != k.shape:
+        raise ValueError(f"q and k must have same shape, got {q.shape} vs {k.shape}")
+    if position_ids.ndim != 1:
+        raise ValueError(f"position_ids must be 1D [T], got shape {tuple(position_ids.shape)}")
+
     B,T, head_dim = q.shape
     assert head_dim % 2 ==0
     device = q.device
+    if position_ids.shape[0] != T:
+        raise ValueError(f"position_ids length must equal T={T}, got {position_ids.shape[0]}")
     if q.shape != k.shape:
         raise ValueError(f"q and k must have same shape, got {q.shape} vs {k.shape}")
-    # [H/2]
+    # [head_dim/2] in float32 for numeric stability
     inv_freq = torch.exp(
                 torch.arange(0,head_dim,2,device=device, dtype=torch.float32)#[head_dim/2]
                 * (-math.log(theta)/head_dim)
-                ) 
-    position_ids_unsqueezed=position_ids.to(device=device, dtype=torch.float32).unsqueeze(1) #[T,1]
+                )
+
+
+
+    pos = position_ids.to(device=device, dtype=torch.float32)
+    pos = pos + position_offset
+    if rope_scaling_type == "linear":
+        pos =  pos/float(rope_scaling_factor)
+        
+    position_ids_unsqueezed=pos.unsqueeze(1) #[T,1]
 
     angles = position_ids_unsqueezed * inv_freq # [T,head_dim/2]
 
