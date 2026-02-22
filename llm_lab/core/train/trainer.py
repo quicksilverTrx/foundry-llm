@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 from dataclasses import dataclass,asdict
-from typing import Optional,Dict,Any,Callable
+from typing import Optional,Dict,Any,Callable,Literal
 
 from torch import nn
 from torch.utils.data import DataLoader
+from llm_lab.core.train.optim import build_adamw_with_decay_groups, OptimConfig
 import torch
 from pathlib import Path
 import csv
 from pathlib import Path
+import math
 
 @dataclass
 class TrainerConfig:
@@ -24,7 +26,8 @@ class TrainerConfig:
 
     max_steps: Optional[int] = None          # stop after N optimizer steps
     eval_every_n_steps: Optional[int] = None # if set, run val eval periodically
-
+    optimizer : Literal["Adam","AdamW"] = "AdamW"
+    weight_decay : float = 0.0
 class Trainer:
     def __init__(self,
                  model : nn.Module,
@@ -36,6 +39,7 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
+        self.optim_group_names = None
 
         self.device = torch.device(self.config.device)
         self.model.to(self.device)
@@ -43,8 +47,15 @@ class Trainer:
     
         
         self.lr = self.config.lr
-        self.optimizer = torch.optim.Adam(self.model.parameters(),lr=self.config.lr)
-        
+        if self.config.optimizer == "Adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(),lr=self.config.lr)
+        elif self.config.optimizer == "AdamW":
+            optim_config = OptimConfig(lr = self.config.lr,weight_decay=self.config.weight_decay)
+            AdamW_optimizer,named_parameters = build_adamw_with_decay_groups(self.model,optim_config)
+            self.optimizer = AdamW_optimizer
+            self.optim_group_names = named_parameters
+        else:
+            raise ValueError ("not supported optimiser ")
         self.loss_fn = torch.nn.CrossEntropyLoss()
 
         self.global_step = 0
@@ -53,10 +64,15 @@ class Trainer:
         self.last_train_logged_loss: Optional[float] = None
         self.last_val_logged_loss: Optional[float] = None
         self.sample_callback: Optional[Callable[[int, int], None]] = None
+        self.best_val_loss = math.inf
+        self.best_ckpt_path: Optional[Path] = None
+        self.ckpt_dir: Optional[Path] = None
         if config.log_dir is not None:
             self.log_dir = Path(config.log_dir)
             self.log_dir.mkdir (parents = True, exist_ok = True)
             self.metrics_path = self.log_dir/"loss_curve.csv"
+            self.ckpt_dir = self.log_dir / "checkpoints"
+            self.ckpt_dir.mkdir(parents=True, exist_ok=True)
         else:
             self.log_dir = None
             self.metrics_path = None
@@ -64,6 +80,7 @@ class Trainer:
     def train_epoch(self,epoch_index: int) -> float:
         self.model.train()
         total_loss = 0
+        steps = 0
         if len(self.train_loader) <=0 :
             raise ValueError ("train_loader is empty")
         for i, data in enumerate(self.train_loader):
@@ -80,6 +97,7 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.config.max_grad_norm)
             self.optimizer.step()
             self.global_step += 1
+            steps += 1
             if self.config.max_steps is not None and self.global_step >= self.config.max_steps:
                 break
             total_loss +=loss.item()
@@ -96,7 +114,7 @@ class Trainer:
                 self.model.train()
             self._maybe_run_sample(epoch_index=epoch_index)
 
-        return total_loss/len(self.train_loader)
+        return total_loss/max(steps,1)
     
     def evaluate(self, epoch_index: int) -> float:
         if self.val_loader is None: return 0.0
@@ -122,6 +140,10 @@ class Trainer:
                 step=self.global_step,
                 loss=avg_loss,
                 )
+            if self.ckpt_dir is not None and avg_loss < self.best_val_loss:
+                self.best_val_loss = float(avg_loss)
+                self.best_ckpt_path = self.ckpt_dir / "best_val.pt"
+                self.save_checkpoint(str(self.best_ckpt_path))
             return avg_loss
         else :
             return 0
