@@ -1,3 +1,4 @@
+# tests/core/test_tokenizer_reserved_tokens.py
 import pytest
 from llm_lab.core.tokenization.subword_tokenizer import SubwordTokenizer, SubwordTokenizerConfig, RESERVED_SPECIAL_TOKENS, _pretokenize
 
@@ -54,3 +55,51 @@ def test_merges_do_not_include_special_tokens():
     for a, b in tok.merges:
         assert a not in RESERVED_SPECIAL_TOKENS
         assert b not in RESERVED_SPECIAL_TOKENS
+
+
+def test_reserved_token_ids_fixed_for_sentencepiece():
+    texts = ["Hello <|user|> world", "Test <|assistant|> reply"]
+    tok = SubwordTokenizer.train_from_iterator(
+        texts, SubwordTokenizerConfig(vocab_size=128, model_type="sentencepiece")
+    )
+
+    assert tok.token_to_id("<|pad|>") == 0
+    assert tok.token_to_id("<|user|>") == 1
+    assert tok.token_to_id("<|assistant|>") == 2
+    assert tok.token_to_id("<|endoftext|>") == 3
+
+
+def test_sentencepiece_exact_reserved_literals_only_are_special():
+    tok = SubwordTokenizer.train_from_iterator(
+        ["hello world", "foo bar", "baz qux"],
+        SubwordTokenizerConfig(vocab_size=128, model_type="sentencepiece"),
+    )
+    ids = tok.encode("hello <|user|> world")
+    assert tok.token_to_id("<|user|>") in ids
+
+
+def test_sentencepiece_unknown_or_malformed_tags_follow_plain_text_path():
+    tok = SubwordTokenizer.train_from_iterator(
+        ["hello world", "foo bar baz", "quick brown fox"],
+        SubwordTokenizerConfig(vocab_size=128, model_type="sentencepiece"),
+    )
+    backend = tok._backend
+
+    samples = [
+        "hello <|foo|> world",
+        "hello <|user world",
+        "hello foo|> world",
+    ]
+    reserved_ids = set(RESERVED_SPECIAL_TOKENS.values())
+
+    for text in samples:
+        ids = tok.encode(text)
+        plain_path_ids = backend._encode_non_special_chunk(text)
+
+        # No special-token regime for malformed/unknown tags.
+        assert ids == plain_path_ids
+        assert all(token_id not in reserved_ids for token_id in ids)
+
+        decoded = tok.decode(ids)
+        for reserved_literal in RESERVED_SPECIAL_TOKENS.keys():
+            assert reserved_literal not in decoded

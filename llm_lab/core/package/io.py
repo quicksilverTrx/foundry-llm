@@ -53,12 +53,10 @@ def save_model_package(
     with config_path.open("w", encoding="utf-8") as f:
         json.dump(asdict(config), f, indent=2, sort_keys=True)
 
-    # 2) save tokenizer under tokenizer/
+    # 2) save tokenizer under tokenizer/ (backend-aware artifact payload)
     tok_dir = tokenizer_dir(pkg)
     tok_dir.mkdir(exist_ok=True)
-    vocab_path = tok_dir / "vocab.json"
-    merges_path = tok_dir / "merges.txt"
-    tokenizer.save(vocab_path, merges_path)
+    tokenizer.save(artifact_dir=tok_dir)
 
     # 3) save model weights under checkpoints/
     ckpt_dir = checkpoints_dir(pkg)
@@ -97,10 +95,13 @@ def load_model_package(
 
 
     tok_dir = tokenizer_dir(pkg)
-    tokenizer = SubwordTokenizer.load_from_files(
-        vocab_path=tok_dir / "vocab.json",
-        merges_path=tok_dir / "merges.txt",
-    )
+    tokenizer = SubwordTokenizer.load(tok_dir)
+    tokenizer_vocab_size = len(tokenizer.stoi)
+    if tokenizer_vocab_size != int(config.vocab_size):
+        raise ValueError(
+            "tokenizer artifact vocab size does not match model config "
+            f"(tokenizer={tokenizer_vocab_size}, config={config.vocab_size})"
+        )
 
 
     model = MiniGPT(config)

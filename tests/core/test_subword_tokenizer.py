@@ -1,3 +1,4 @@
+# tests/core/test_subword_tokenizer.py
 import pytest
 
 from llm_lab.core.tokenization.subword_tokenizer import SubwordTokenizer, SubwordTokenizerConfig
@@ -35,3 +36,16 @@ def test_bpe_unknown_symbol_raises():
 
     with pytest.raises(KeyError):
         tok.encode("z")  # unseen char -> should fail loudly in your P1 design
+
+
+def test_sentencepiece_facade_contract_smoke():
+    texts = ["hello world", "hello there", "world hello"]
+    cfg = SubwordTokenizerConfig(vocab_size=80, model_type="sentencepiece")
+    tok = SubwordTokenizer.train_from_iterator(texts, cfg)
+
+    ids = tok.encode("hello <|assistant|> world")
+    assert isinstance(ids, list)
+    assert ids
+    assert tok.token_to_id("<|pad|>") == 0
+    assert tok.id_to_token(1) == "<|user|>"
+    assert tok.backend_family == "sentencepiece"
