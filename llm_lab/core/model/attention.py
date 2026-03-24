@@ -1,5 +1,4 @@
 # llm_lab/core/model/attention.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass 
@@ -10,49 +9,107 @@ from llm_lab.core.model.pos_encodings import apply_rope
 PastKeyValue = Tuple[torch.Tensor, torch.Tensor]
 PastKeyValues = List[PastKeyValue] # len == n_layers (model-level)
 
-_CAUSAL_MASK_CACHE = {} # # key: (T, str(device), dtype) -> Tensor[T,T]
+_CAUSAL_MASK_CACHE = {} # key: (T, str(device), dtype) -> Tensor[T, T]
 USE_CACHE = True
 
-def _causal_mask ( T:int, device : torch.device, dtype = torch.float32) -> torch.Tensor :
+def _validate_kv_cache(k: torch.Tensor, v: torch.Tensor) -> None:
+    """Helper validator for canonical KV cache layout."""
+    if k.shape != v.shape:
+        raise ValueError(f"k/v shape mismatch: {tuple(k.shape)} vs {tuple(v.shape)}")
+    if k.ndim != 4:
+        raise ValueError(f"expected KV as 4D [B,n_kv_heads,T,head_dim], got {tuple(k.shape)}")
+
+
+def _append_past(
+    k_new: torch.Tensor,
+    v_new: torch.Tensor,
+    past: Optional[PastKeyValue],
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """Concatenates cache along canonical time axis=2."""
+    _validate_kv_cache(k_new, v_new)
+    if past is None:
+        return k_new,v_new,0
+    k_past,v_past = past
+    _validate_kv_cache(k_past, v_past)
+    time_past = k_past.shape[2]
+    k = torch.cat([k_past,k_new],dim=2)
+    v = torch.cat([v_past,v_new],dim=2)
+    _validate_kv_cache(k, v)
+    return k,v,time_past
+
+
+def _causal_mask(
+    query_len: int,
+    key_len: Optional[int] = None,
+    device: Optional[torch.device] = None,
+    dtype=torch.float32,
+) -> torch.Tensor:
     """
-    Returns a [T, T] mask with -inf on positions j > i (future),
-    0 on allowed positions.
-    Causal mask [T, T]:
-        0      for j <= i (allowed: past + self)
-        -inf   for j > i  (future positions)
+    Returns a [T_q, T_k] mask with -inf on future positions.
     """
-    if USE_CACHE:
-        key = (T, str(device), dtype)
+    # Backward-compatible path: _causal_mask(T, device, dtype)
+    if isinstance(key_len, torch.device):
+        if isinstance(device, torch.dtype):
+            dtype = device
+        device = key_len
+        key_len = None
+    # Backward-compatible path: _causal_mask(T, device=<...>, dtype=<...>)
+    if key_len is None:
+        key_len = query_len
+    if device is None:
+        raise ValueError("device is required")
+
+    if USE_CACHE and query_len == key_len:
+        key = (query_len, str(device), dtype)
 
         m = _CAUSAL_MASK_CACHE.get(key)
         if m is None:
             neg = torch.finfo(dtype).min
-            mask = torch.full((T, T), (neg), device=device, dtype=dtype)
+            mask = torch.full((query_len, key_len), (neg), device=device, dtype=dtype)
             mask = torch.triu(mask, diagonal=1)
             _CAUSAL_MASK_CACHE[key] = mask
             m = mask
         return m
-    else:
-        mask = torch.full((T, T), float(-1e9), device=device, dtype=dtype)
-        mask = torch.triu(mask, diagonal=1) 
-        return mask
 
-def _apply_masks(scores: torch.Tensor, *, attention_mask: Optional[torch.Tensor], T: int, device, dtype):
-    # scores: [B, ..., T, T]
-    scores = scores + _causal_mask(T, device, dtype=dtype)
+    neg = torch.finfo(dtype).min
+    query_idx = torch.arange(query_len, device=device)[:, None]
+    key_idx = torch.arange(key_len, device=device)[None, :]
+    max_allowed = (key_len - query_len) + query_idx
+    mask = torch.zeros((query_len, key_len), device=device, dtype=dtype)
+    mask = mask.masked_fill(key_idx > max_allowed, neg)
+    return mask
+
+def _apply_masks(scores: torch.Tensor, *, attention_mask: Optional[torch.Tensor], device, dtype):
+    # scores: [B, ..., T_q, T_k]
+    query_len = scores.shape[-2]
+    key_len = scores.shape[-1]
+    scores = scores + _causal_mask(query_len, key_len, device, dtype=dtype)
 
     if attention_mask is None:
         return scores
 
-    # Accept [B, T] with 1=keep, 0=mask
-    if attention_mask.ndim != 2 or attention_mask.shape[-1] != T:
-        raise ValueError(f"attention_mask must be [B,T], got {tuple(attention_mask.shape)}")
+    # Accept [B, L] with 1=keep, 0=mask, where L is either T_q or T_k.
+    if attention_mask.ndim != 2:
+        raise ValueError(f"attention_mask must be [B,T_k], got {tuple(attention_mask.shape)}")
+    if attention_mask.shape[-1] == query_len and key_len > query_len:
+        # Decode path commonly passes mask for new tokens only; treat cached keys as valid.
+        pad = torch.ones((attention_mask.shape[0], key_len - query_len), device=attention_mask.device, dtype=attention_mask.dtype)
+        attention_mask = torch.cat([pad, attention_mask], dim=-1)
+    elif attention_mask.shape[-1] != key_len:
+        raise ValueError(f"attention_mask must have key length {key_len}, got {tuple(attention_mask.shape)}")
 
     # Convert to boolean keep mask, then mask out keys (last dim)
-    keep = attention_mask.to(torch.bool)  # [B,T]
+    keep = attention_mask.to(torch.bool)  # [B, T_k]
     neg = torch.finfo(dtype).min
-    # Broadcast: [B,1,1,T] over heads/query positions
-    scores = scores.masked_fill(~keep[:, None, None, :], neg)
+    if scores.ndim == 3:
+        # scores is [B,T_q,T_k], so broadcast over query axis only.
+        key_mask = ~keep[:, None, :]  # [B,1,T_k]
+    elif scores.ndim == 4:
+        # scores is [B,H,T_q,T_k], so broadcast over heads and query axes.
+        key_mask = ~keep[:, None, None, :]  # [B,1,1,T_k]
+    else:
+        raise ValueError(f"scores must be [B,T_q,T_k] or [B,H,T_q,T_k], got {tuple(scores.shape)}")
+    scores = scores.masked_fill(key_mask, neg)
     return scores
 
 @dataclass
@@ -108,6 +165,10 @@ class SingleHeadAttention(nn.Module):
         k_val = self.k_proj(x) # [B, T, head_dim]
         v_val = self.v_proj(x) # [B, T, head_dim]
 
+        if past_key_value is not None:
+            past_len = past_key_value[0].shape[2]
+        else :
+            past_len = 0
         if self.config.use_rope:
             if position_ids is None:
                 raise ValueError("use_rope=True but position_ids=None")
@@ -115,20 +176,25 @@ class SingleHeadAttention(nn.Module):
             q_val, k_val = apply_rope(q_val, k_val, position_ids,
                                       rope_scaling_type=self.config.rope_scaling_type,
                                       rope_scaling_factor=self.config.rope_scaling_factor,
-                                      position_offset=0,)  # theta default is fine for base RoPE
-
-        k_t = k_val.transpose(-2,-1) # [B,  head_dim, T]
-
+                                      position_offset=past_len,)  # theta default is fine for base RoPE
         
-        attention_weights = q_val @ k_t  # [B, T, T]
-        attention_weights = attention_weights*(self.scale) # [B, T, T]
-        assert attention_weights.shape == (B, T, T)
+        k_present, v_present, _ = _append_past(
+            k_val.unsqueeze(1),
+            v_val.unsqueeze(1),
+            past_key_value,
+        )
+        k_val = k_present.squeeze(1)
+        v_val = v_present.squeeze(1)
+        k_t = k_val.transpose(-2,-1) # [B, D_head, T_k]
+        Tq = q_val.shape[1]
+        Tk = k_val.shape[1]
 
-         # Apply causal mask so each position sees only <= its index
-        # mask = _causal_mask(T,x.device,dtype=attention_weights.dtype) # [T, T]
-        #attention_weights_masked = attention_weights + mask # [B, T, T] + [T, T] (broadcast) -> [B, T, T]
+        attention_weights = q_val @ k_t  # [B, T_q, T_k]
+        attention_weights = attention_weights*(self.scale) # [B, T_q, T_k]
+        assert attention_weights.shape == (B, Tq, Tk)
+
         attention_weights_masked = _apply_masks(
-                attention_weights, attention_mask=attention_mask, T=T, device=x.device, dtype=attention_weights.dtype
+                attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
             )
         # Turn scores into probabilities over positions j
         #attention_weights_probability = nn.Softmax(dim=-1)(attention_weights_masked) # dim=-1 to normalize over the “which position to attend to” dimension.
@@ -136,7 +202,11 @@ class SingleHeadAttention(nn.Module):
         attention_weights_probability = self.dropout_p_layer(attention_weights_probability) 
         
         # Weighted sum of value vectors → new representation
-        y_t = attention_weights_probability@ v_val # [B, T, T] * [B, T, head_dim] =  [B, T, head_dim]
+        y_t = attention_weights_probability @ v_val  # [B,T_q,T_k] x [B,T_k,D] -> [B,T_q,D]
+        assert y_t.shape == (B, Tq, self.head_dim)
+        if use_cache:
+            return y_t,(k_present,v_present)
+        
         return y_t,None
 
 @dataclass
@@ -204,6 +274,15 @@ class MultiHeadAttention(nn.Module):
         x: [B, T, d_model]
         returns: [B, T, d_model]
         """
+        present_k_list = []
+        present_v_list = []
+        if x.ndim == 4 and x.shape[1] == 1:
+            # Defensive: some upstream path accidentally introduces a singleton dim.
+            # Squeeze to recover [B,T,D] expected by attention.
+            x = x.squeeze(1)
+        if x.ndim != 3:
+            raise ValueError(f"MultiHeadAttention expected x [B,T,D] (or [B,1,T,D]), got {tuple(x.shape)}")
+
         B, T, C = x.shape
         assert C == self.d_model
 
@@ -211,16 +290,35 @@ class MultiHeadAttention(nn.Module):
         if self.config.attention_type == "mha":
             # Run each head independently, then concat along feature dim
             head_outputs = []
-            for head in self.heads:
-                attention_outputs,_ = head(x, position_ids=position_ids,attention_mask = attention_mask ,past_key_value = past_key_value ,use_cache = use_cache)  # each [B, T, head_dim]
+            for head_index, head in enumerate(self.heads):
+                head_past = None
+                if past_key_value is not None:
+                    k_past, v_past = past_key_value
+                    head_past = (k_past[:, head_index : head_index + 1, :, :], v_past[:, head_index : head_index + 1, :, :])
+
+                attention_outputs,present_kv = head(
+                    x,
+                    position_ids=position_ids,
+                    attention_mask=attention_mask,
+                    past_key_value=head_past,
+                    use_cache=use_cache,
+                )  # each [B, T, head_dim]
                 head_outputs.append(attention_outputs) 
+                if use_cache:
+                    if present_kv is None:
+                        raise RuntimeError(f"Head {head_index} returned no present KV while use_cache=True")
+                    k_head, v_head = present_kv
+                    present_k_list.append(k_head)
+                    present_v_list.append(v_head)
             head_outputs = torch.cat(head_outputs, dim=-1)  # # [B, T, n_heads * head_dim] = [B, T, d_model]
 
             projected_head = self.out_proj(head_outputs) # [B, T, d_model]
             y = self.dropout(projected_head)
 
-
-
+            if use_cache:
+                k_present = torch.cat(present_k_list, dim=1)  # [B, n_heads, T_total, head_dim]
+                v_present = torch.cat(present_v_list, dim=1)
+                return y,(k_present,v_present)
             return y,None
         elif self.config.attention_type == "gqa":
             H = self.n_head
@@ -228,13 +326,12 @@ class MultiHeadAttention(nn.Module):
             D = self.head_dim
             repeat = H//H_kv
             # [B, T, d_model] -> [B, T, H * D] -> project to -> [B,H,T,D]
-            q = self.q_proj(x).view(B,T,H,D).transpose(1,2)
+            q = self.q_proj(x).view(B,T,H,D).transpose(1,2)  # [B,H,T_q,D]
             # [B, T, d_model] -> [B, T, H_kv * D] -> project to -> [B,H_kv,T,D]
-            k = self.k_proj(x).view(B,T,H_kv,D).transpose(1,2)
-            v = self.v_proj(x).view(B,T,H_kv,D).transpose(1,2)
-
-            #Expand KV along the head axis to get [B,H,T,D]
-            k = k.repeat_interleave(repeat,dim=1) 
+            k = self.k_proj(x).view(B,T,H_kv,D).transpose(1,2)  # [B,H_kv,T_q,D]
+            v = self.v_proj(x).view(B,T,H_kv,D).transpose(1,2)  # [B,H_kv,T_q,D]
+            # Expand KV to H heads for compute. Cache stays in base H_kv space.
+            k = k.repeat_interleave(repeat,dim=1)
             v = v.repeat_interleave(repeat,dim=1)
             
             if self.config.use_rope:
@@ -245,38 +342,45 @@ class MultiHeadAttention(nn.Module):
 
                 q_batched = q.reshape(B*H,T,D)
                 k_batched = k.reshape(B*H,T,D)
+                if past_key_value is not None:
+                    past_len = past_key_value[0].shape[2]
+                else :
+                    past_len=0
                 q, k = apply_rope(q_batched, k_batched, position_ids,
                                   rope_scaling_type=self.config.rope_scaling_type,
                                     rope_scaling_factor=self.config.rope_scaling_factor,
-                                    position_offset=0)  # theta default is fine for base RoPE
+                                    position_offset=past_len)  # theta default is fine for base RoPE
                 q = q.reshape(B,H,T,D)
                 k = k.reshape(B,H,T,D)
 
-            k_t = k.transpose(-2,-1) # [B,  n_head,D, T]
+            # Collapse to base heads so cache ABI remains [B,H_kv,T,D].
+            k_base = k[:, ::repeat, :, :]
+            v_base = v[:, ::repeat, :, :]
+            k_present, v_present, _ = _append_past(k_base, v_base, past_key_value)
+            # Expand cached totals back to H heads for attention math.
+            k_total = k_present.repeat_interleave(repeat, dim=1)
+            v_total = v_present.repeat_interleave(repeat, dim=1)
+            k_t = k_total.transpose(-2,-1) # [B, n_head, D, T_k]
+            Tq = q.shape[2]
+            Tk = k_total.shape[2]
 
-            
-            attention_weights = q @ k_t  # [B, n_head,T, T]
-            attention_weights = attention_weights*(self.scale) # [B,n_head,  T, T]
-            assert attention_weights.shape == (B, H,T, T)
-
-            # # Apply causal mask so each position sees only <= its index
-            # mask = _causal_mask(T,x.device,dtype=attention_weights.dtype) # [T, T]
-            # attention_weights_masked = attention_weights + mask # [B,n_head, T, T] + [T, T] (broadcast) -> [B, n_head, T, T]
+            attention_weights = q @ k_t  # [B, n_head, T_q, T_k]
+            attention_weights = attention_weights*(self.scale) # [B, n_head, T_q, T_k]
+            assert attention_weights.shape == (B, H, Tq, Tk)
 
             attention_weights_masked = _apply_masks(
-                attention_weights, attention_mask=attention_mask, T=T, device=x.device, dtype=attention_weights.dtype
-            ) # [B, n_head, T, T]
+                attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
+            ) # [B, n_head, T_q, T_k]
 
             attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
             attention_weights_probability = self.attention_dropout_layer(attention_weights_probability) 
             
             # Weighted sum of value vectors → new representation
-            s = attention_weights_probability@ v # [B, n_head, T, T] * [B,n_head,T,D] = [B,n_head,T,D] 
-            output = s.transpose(1,2).contiguous().view(B, T, H * D) # n_head * D = D_model
+            s = attention_weights_probability @ v_total # [B,n_head,T_q,T_k] * [B,n_head,T_k,D] = [B,n_head,T_q,D]
+            output = s.transpose(1,2).contiguous().view(B, Tq, H * D) # n_head * D = D_model
             projection = self.out_proj(output)
             y_t = self.dropout(projection)
             
+            if use_cache:
+                return y_t,(k_present,v_present)
             return y_t,None 
-
-
-

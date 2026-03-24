@@ -1,5 +1,5 @@
+# tests/core/test_forward_api_contract.py
 import torch
-import pytest
 from llm_lab.core.model.gpt import MiniGPT, MiniGPTConfig
 
 def _cfg():
@@ -19,12 +19,10 @@ def test_forward_returns_tuple_and_logits_shape():
 def test_use_cache_true_behavior_is_explicit():
     m = MiniGPT(_cfg())
     x = torch.randint(0, m.config.vocab_size, (2, 5))
-
-
-
-
-    with pytest.raises(NotImplementedError):
-        _ = m(x, use_cache=True)
+    logits, past = m(x, use_cache=True)
+    assert logits.shape == (2, 5, m.config.vocab_size)
+    assert isinstance(past, list)
+    assert len(past) == m.config.n_layers
 
 
 def test_forward_returns_tuple_and_logits_shape_1():

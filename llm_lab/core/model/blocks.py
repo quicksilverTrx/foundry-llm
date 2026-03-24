@@ -1,3 +1,4 @@
+# llm_lab/core/model/blocks.py
 #llm_lab/core/model/blocks
 from __future__ import annotations
 
@@ -54,13 +55,25 @@ class TransformerBlock(nn.Module):
                                       mlp_type=config.mlp_type)
         self.mlp = FeedForward(ff_config)
     
-    def forward(self,x:torch.Tensor,position_ids : Optional[torch.Tensor] = None, attention_mask: Optional[torch.Tensor] = None, past_key_value : Optional[PastKeyValue] = None, use_cache = False) -> Tuple[torch.Tensor,Optional[PastKeyValue]]:
+    def forward(self,x:torch.Tensor,position_ids : Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None, past_key_value : Optional[PastKeyValue] = None,
+                use_cache = False) -> Tuple[torch.Tensor,Optional[PastKeyValue]]:
         """
-        x: [B, T, d_model]
+        x: [B, T, D]
+        position_ids: [T] or None
+        attention_mask: [B, T] (current chunk)
+        past_key_value: (k, v) each [B, H_kv, T_past, D_head] or None
+        returns:
+          y: [B, T, D]
+          present_key_value: (k, v) each [B, H_kv, T_total, D_head] or None
         """
-        attention_output,_ =  self.attn(self.norm1(x),position_ids=position_ids, 
-                          attention_mask = attention_mask ,past_key_value = past_key_value ,use_cache = use_cache)
+        assert x.ndim == 3, f"TransformerBlock expects x [B,T,D], got {tuple(x.shape)}"
+        xn = self.norm1(x)
+        assert xn.ndim == 3, f"norm1 must preserve [B,T,D], got {tuple(xn.shape)}"
+        # Residual branch: self-attention over normalized input.
+        attention_output,present_key_value = self.attn(xn, position_ids=position_ids,
+                                 attention_mask=attention_mask, past_key_value=past_key_value, use_cache=use_cache)
+        # Standard pre-norm decoder block: x + attn, then + mlp(norm(.)).
         h = attention_output + x
         y = h + self.mlp(self.norm2(h))
-        return y, None
-
+        return y, present_key_value
