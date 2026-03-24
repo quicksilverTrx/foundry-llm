@@ -1,3 +1,4 @@
+# tests/core/test_rmsnorm_math_and_scale.py
 import torch
 from llm_lab.core.model.norms import RMSNorm
 

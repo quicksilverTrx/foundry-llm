@@ -1,3 +1,4 @@
+# tests/core/test_rope_requires_position_ids.py
 import torch
 import pytest
 from llm_lab.core.model.attention import SingleHeadAttention, SingleHeadAttentionConfig

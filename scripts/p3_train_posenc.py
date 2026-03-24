@@ -1,3 +1,4 @@
+# scripts/p3_train_posenc.py
 from __future__ import annotations
 
 import argparse
@@ -70,7 +71,7 @@ def _load_or_make_split(split_dir: Path, tokenizer: SubwordTokenizer, text: str)
         return train_ids, val_ids
 
     all_ids = tokenizer.encode(text)
-    split_idx = int(0.98 * len(all_ids))
+    split_idx = int(0.90 * len(all_ids))
     train_ids = all_ids[:split_idx]
     val_ids = all_ids[split_idx:]
 
@@ -95,8 +96,13 @@ def main() -> None:
     p.add_argument("--lr", type=float, default=3e-5)
     p.add_argument("--max_steps", type=int, default=2000)
     p.add_argument("--eval_every", type=int, default=200)  # val logging cadence
+    p.add_argument("--train_seq_len", type=int, default=128) 
+
+
+    p.add_argument_group
 
     args = p.parse_args()
+    
 
     device = pick_device(args.device)
     set_seed(args.seed)
@@ -112,6 +118,10 @@ def main() -> None:
 
     cfg_dict = load_json(Path(args.config))
     cfg = MiniGPTConfig(**cfg_dict)
+    train_seq_len = args.train_seq_len or cfg.block_size
+    print(f"train length sequence {train_seq_len}")
+    if train_seq_len > cfg.block_size:
+        raise ValueError(f"train_seq_len={train_seq_len} cannot exceed model block_size={cfg.block_size}")
 
     # snapshot config
     (run_dir / "config_snapshot.json").write_text(json.dumps(cfg_dict, indent=2), encoding="utf-8")
@@ -126,8 +136,8 @@ def main() -> None:
     print(f"Split token stream: train_ids={len(train_ids)} val_ids={len(val_ids)}")
 
     # datasets must match cfg.block_size for training
-    train_ds = LanguageModelingDataset(text="", tokenizer=tokenizer, block_size=cfg.block_size, token_ids=train_ids)
-    val_ds = LanguageModelingDataset(text="", tokenizer=tokenizer, block_size=cfg.block_size, token_ids=val_ids)
+    train_ds = LanguageModelingDataset(text="", tokenizer=tokenizer, block_size=train_seq_len, token_ids=train_ids)
+    val_ds = LanguageModelingDataset(text="", tokenizer=tokenizer, block_size=train_seq_len, token_ids=val_ids)
 
     g = torch.Generator()
     g.manual_seed(args.seed)
@@ -143,14 +153,20 @@ def main() -> None:
         max_grad_norm=1.0,
         log_dir=str(run_dir),
         log_every_n_steps=10,
-        num_epochs=1,
+        num_epochs=2,
         sample_every_n_steps_multiple=None,
         max_steps=args.max_steps,
         eval_every_n_steps=args.eval_every,
     )
 
     trainer = Trainer(model, train_loader, val_loader, tcfg)
-    trainer.fit(num_epochs=1)
+    trainer.fit(num_epochs=2)
+    best_ckpt = Path(run_dir) / "checkpoints" / "best_val.pt"
+    if best_ckpt.exists():
+        trainer.load_checkpoint(str(best_ckpt))
+        print(f"Reloaded best checkpoint for packaging: {best_ckpt}")
+    else:
+        print("No best checkpoint found; packaging current weights.")
 
     # Save package for this run
     pkg_dir = run_dir / "package"
@@ -160,6 +176,7 @@ def main() -> None:
         tokenizer=tokenizer,
         model=model,
         is_best=True,
+        step = args.max_steps
     )
     print(f"Saved package to: {pkg_dir}")
 

@@ -1,3 +1,4 @@
+# scripts/p1_train_char_sanity_check.py
 # scripts/p1_train_char_real.py
 
 import os

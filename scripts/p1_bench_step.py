@@ -1,3 +1,4 @@
+# scripts/p1_bench_step.py
 from __future__ import annotations
 import argparse
 import torch
