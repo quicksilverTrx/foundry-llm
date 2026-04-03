@@ -1,6 +1,7 @@
 # llm_lab/core/model/gpt.py
 from __future__ import annotations
 from dataclasses import dataclass
+import math
 
 from torch import nn
 import torch
@@ -30,6 +31,8 @@ class MiniGPTConfig:
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
     arch_family :Literal["miniGPT","nanollama"] = "miniGPT"
+    tie_weights: bool = False
+    use_sdpa: bool = False   # enables F.scaled_dot_product_attention in every attention block
 
     def __post_init__(self):
         if self.attention_type == "gqa":
@@ -104,7 +107,8 @@ class MiniGPT(nn.Module):
             self.sin_pos = SinusoidalPositionalEncoding(config.block_size, config.d_model)
         #embedding layer
         self.token_embed = nn.Embedding(config.vocab_size,config.d_model)
-        self.pos_embed = nn.Embedding(config.block_size,config.d_model)
+        if config.pos_encoding_type != "rope":
+            self.pos_embed = nn.Embedding(config.block_size,config.d_model)
 
         # Blocks
         block_cfg = TransformerBlockConfig(
@@ -118,8 +122,8 @@ class MiniGPT(nn.Module):
             attention_type = config.attention_type,
             num_kv_heads=config.num_kv_heads,
             rope_scaling_factor=config.rope_scaling_factor,
-            rope_scaling_type = config.rope_scaling_type
-
+            rope_scaling_type = config.rope_scaling_type,
+            use_sdpa=config.use_sdpa,
         )
 
         self.blocks = nn.ModuleList([TransformerBlock(block_cfg) for _ in range(config.n_layers)])
@@ -127,6 +131,23 @@ class MiniGPT(nn.Module):
         # Final norm + LM head
         self.ln_f = make_norm(config.norm_type,config.d_model)
         self.lm_head = nn.Linear(config.d_model,config.vocab_size)
+        if config.tie_weights:
+            # Rescale embedding to GPT-standard (std=0.02) before tying.
+            # Default nn.Embedding init is Normal(0,1); tied lm_head would inherit that,
+            # producing logits ~ Normal(0, sqrt(d_model)=22.6) and initial loss >> 9.7.
+            nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
+            self.lm_head.weight = self.token_embed.weight
+
+        # Scaled residual init (GPT-2 §2.3).
+        # Residual projections (out_proj in attention, w_down/fc2 in MLP) accumulate into the
+        # residual stream at every layer. Without scaling, activation std grows ~sqrt(n_layers)×,
+        # creating uneven gradient magnitudes across depth. Scaling by 1/sqrt(2*n_layers) keeps
+        # the residual stream variance approximately constant regardless of depth.
+        # std = 0.02 / sqrt(2 * n_layers) = 0.02 / sqrt(36) ≈ 0.00333 for 18 layers.
+        _residual_std = 0.02 / math.sqrt(2 * config.n_layers)
+        for pn, p in self.named_parameters():
+            if pn.endswith("out_proj.weight") or pn.endswith("w_down.weight") or pn.endswith("fc2.weight"):
+                nn.init.normal_(p, mean=0.0, std=_residual_std)
 
     def forward(self, input_ids: torch.Tensor, 
                 attention_mask : Optional[torch.Tensor] = None,

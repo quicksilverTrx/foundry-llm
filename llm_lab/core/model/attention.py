@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass 
 from typing import Literal,Optional,List,Tuple
 import torch
+import torch.nn.functional as F
 from torch import nn
 from llm_lab.core.model.pos_encodings import apply_rope
 PastKeyValue = Tuple[torch.Tensor, torch.Tensor]
@@ -117,9 +118,10 @@ class SingleHeadAttentionConfig:
     d_model : int
     head_dim : int
     dropout : float = 0.0
-    use_rope: bool = False 
+    use_rope: bool = False
     rope_scaling_type: Literal["none", "linear"] = "none"
-    rope_scaling_factor: float = 1.0 
+    rope_scaling_factor: float = 1.0
+    use_sdpa: bool = False   # if True: F.scaled_dot_product_attention; if False: explicit softmax
 
 
 class SingleHeadAttention(nn.Module):
@@ -147,6 +149,7 @@ class SingleHeadAttention(nn.Module):
         # Dropout on attention probabilities
         self.dropout_p_layer = nn.Dropout(self.dropout_p)
         self.scale = self.head_dim ** -0.5
+        self.use_sdpa = config.use_sdpa
 
 
     
@@ -185,24 +188,56 @@ class SingleHeadAttention(nn.Module):
         )
         k_val = k_present.squeeze(1)
         v_val = v_present.squeeze(1)
-        k_t = k_val.transpose(-2,-1) # [B, D_head, T_k]
-        Tq = q_val.shape[1]
-        Tk = k_val.shape[1]
-
-        attention_weights = q_val @ k_t  # [B, T_q, T_k]
-        attention_weights = attention_weights*(self.scale) # [B, T_q, T_k]
-        assert attention_weights.shape == (B, Tq, Tk)
-
-        attention_weights_masked = _apply_masks(
-                attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
-            )
-        # Turn scores into probabilities over positions j
-        #attention_weights_probability = nn.Softmax(dim=-1)(attention_weights_masked) # dim=-1 to normalize over the “which position to attend to” dimension.
-        attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
-        attention_weights_probability = self.dropout_p_layer(attention_weights_probability) 
-        
-        # Weighted sum of value vectors → new representation
-        y_t = attention_weights_probability @ v_val  # [B,T_q,T_k] x [B,T_k,D] -> [B,T_q,D]
+        if not self.use_sdpa:                                                   # ── raw attention path ──
+            k_t = k_val.transpose(-2,-1) # [B, D_head, T_k]
+            Tq = q_val.shape[1]
+            Tk = k_val.shape[1]
+            attention_weights = q_val @ k_t  # [B, T_q, T_k]
+            attention_weights = attention_weights*(self.scale) # [B, T_q, T_k]
+            assert attention_weights.shape == (B, Tq, Tk)
+            attention_weights_masked = _apply_masks(
+                    attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
+                )
+            # Turn scores into probabilities over positions j
+            #attention_weights_probability = nn.Softmax(dim=-1)(attention_weights_masked) # dim=-1 to normalize over the "which position to attend to" dimension.
+            attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
+            attention_weights_probability = self.dropout_p_layer(attention_weights_probability)
+            # Weighted sum of value vectors → new representation
+            y_t = attention_weights_probability @ v_val  # [B,T_q,T_k] x [B,T_k,D] -> [B,T_q,D]
+        else:                                                                   # ── SDPA path ──
+            # k_t: SDPA takes k_val as [B,1,T_k,head_dim] via unsqueeze — no explicit transpose needed
+            Tq = q_val.shape[1]
+            Tk = k_val.shape[1]
+            # attention_weights_masked: build attn_mask_sdpa that mirrors _apply_masks(causal + padding).
+            # None  → is_causal flag encodes the causal mask internally (fused flash-attention kernel).
+            # else  → additive float bias: causal_bias [1,1,Tq,Tk] + padding_bias [B,1,1,Tk].
+            if attention_mask is None:
+                attn_mask_sdpa = None
+                is_causal      = (Tq == Tk)  # full-sequence: causal; decode step (Tq<Tk): attend all cached keys
+            else:
+                if attention_mask.ndim != 2:
+                    raise ValueError(f"attention_mask must be [B,T_k], got {tuple(attention_mask.shape)}")
+                neg            = torch.finfo(q_val.dtype).min
+                causal_bias    = _causal_mask(Tq, Tk, x.device, dtype=q_val.dtype)[None, None]  # [1,1,Tq,Tk]
+                keep           = attention_mask.to(torch.bool)
+                if keep.shape[-1] == Tq and Tk > Tq:
+                    pad  = torch.ones(keep.shape[0], Tk - Tq, device=keep.device, dtype=keep.dtype)
+                    keep = torch.cat([pad, keep], dim=-1)
+                padding_bias   = torch.zeros(B, 1, 1, Tk, device=x.device, dtype=q_val.dtype).masked_fill(
+                    ~keep[:, None, None, :], neg
+                )
+                attn_mask_sdpa = causal_bias + padding_bias                          # [B,1,Tq,Tk] additive bias
+                is_causal      = False  # causality already encoded in causal_bias
+            # attention_weights = q_val @ k_t * scale               → fused inside SDPA
+            # Turn scores into probabilities over positions j        → fused (attn_mask_sdpa + softmax)
+            # attention_weights_probability = dropout_p_layer(...)   → dropout_p passed directly
+            dropout_p = self.dropout_p if self.training else 0.0
+            # Weighted sum of value vectors → new representation
+            y_4d = F.scaled_dot_product_attention(
+                q_val.unsqueeze(1), k_val.unsqueeze(1), v_val.unsqueeze(1),
+                attn_mask=attn_mask_sdpa, dropout_p=dropout_p, is_causal=is_causal,
+            )                                                                        # [B,1,T_q,head_dim]
+            y_t = y_4d.squeeze(1)  # [B, T_q, head_dim]
         assert y_t.shape == (B, Tq, self.head_dim)
         if use_cache:
             return y_t,(k_present,v_present)
@@ -219,6 +254,7 @@ class MultiHeadAttentionConfig:
     num_kv_heads: Optional[int] = None
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
+    use_sdpa: bool = False   # propagated to each head (MHA) or used directly (GQA)
 
 class MultiHeadAttention(nn.Module):
     """
@@ -240,7 +276,8 @@ class MultiHeadAttention(nn.Module):
         if self.attention_type == "mha":
             single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope,
                                                            rope_scaling_type=config.rope_scaling_type,
-                                                        rope_scaling_factor=config.rope_scaling_factor)
+                                                        rope_scaling_factor=config.rope_scaling_factor,
+                                                        use_sdpa=config.use_sdpa)
 
             self.heads = nn.ModuleList([SingleHeadAttention(single_head_config) for _ in range(self.n_head)])
             
@@ -265,6 +302,7 @@ class MultiHeadAttention(nn.Module):
             self.scale = self.head_dim ** -0.5
             self.out_proj = nn.Linear(self.d_model,self.d_model)
             self.dropout = nn.Dropout(config.dropout)
+            self.use_sdpa = config.use_sdpa
 
 
 
@@ -360,23 +398,54 @@ class MultiHeadAttention(nn.Module):
             # Expand cached totals back to H heads for attention math.
             k_total = k_present.repeat_interleave(repeat, dim=1)
             v_total = v_present.repeat_interleave(repeat, dim=1)
-            k_t = k_total.transpose(-2,-1) # [B, n_head, D, T_k]
-            Tq = q.shape[2]
-            Tk = k_total.shape[2]
-
-            attention_weights = q @ k_t  # [B, n_head, T_q, T_k]
-            attention_weights = attention_weights*(self.scale) # [B, n_head, T_q, T_k]
-            assert attention_weights.shape == (B, H, Tq, Tk)
-
-            attention_weights_masked = _apply_masks(
-                attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
-            ) # [B, n_head, T_q, T_k]
-
-            attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
-            attention_weights_probability = self.attention_dropout_layer(attention_weights_probability) 
-            
-            # Weighted sum of value vectors → new representation
-            s = attention_weights_probability @ v_total # [B,n_head,T_q,T_k] * [B,n_head,T_k,D] = [B,n_head,T_q,D]
+            if not self.use_sdpa:                                               # ── raw attention path ──
+                k_t = k_total.transpose(-2,-1) # [B, n_head, D, T_k]
+                Tq = q.shape[2]
+                Tk = k_total.shape[2]
+                attention_weights = q @ k_t  # [B, n_head, T_q, T_k]
+                attention_weights = attention_weights*(self.scale) # [B, n_head, T_q, T_k]
+                assert attention_weights.shape == (B, H, Tq, Tk)
+                attention_weights_masked = _apply_masks(
+                    attention_weights, attention_mask=attention_mask, device=x.device, dtype=attention_weights.dtype
+                ) # [B, n_head, T_q, T_k]
+                attention_weights_probability = torch.softmax(attention_weights_masked,dim=-1)
+                attention_weights_probability = self.attention_dropout_layer(attention_weights_probability)
+                # Weighted sum of value vectors → new representation
+                s = attention_weights_probability @ v_total # [B,n_head,T_q,T_k] * [B,n_head,T_k,D] = [B,n_head,T_q,D]
+            else:                                                               # ── SDPA path ──
+                # k_t: SDPA takes k_total as [B,n_head,T_k,D] directly — no explicit transpose needed
+                Tq = q.shape[2]
+                Tk = k_total.shape[2]
+                # attention_weights_masked: build attn_mask_sdpa that mirrors _apply_masks(causal + padding).
+                # None  → is_causal flag encodes the causal mask internally (fused flash-attention kernel).
+                # else  → additive float bias: causal_bias [1,1,Tq,Tk] + padding_bias [B,1,1,Tk].
+                if attention_mask is None:
+                    attn_mask_sdpa = None
+                    is_causal      = (Tq == Tk)  # full-sequence: causal; decode step (Tq<Tk): attend all cached keys
+                else:
+                    if attention_mask.ndim != 2:
+                        raise ValueError(f"attention_mask must be [B,T_k], got {tuple(attention_mask.shape)}")
+                    neg            = torch.finfo(q.dtype).min
+                    causal_bias    = _causal_mask(Tq, Tk, q.device, dtype=q.dtype)[None, None]  # [1,1,Tq,Tk]
+                    keep           = attention_mask.to(torch.bool)
+                    if keep.shape[-1] == Tq and Tk > Tq:
+                        pad  = torch.ones(keep.shape[0], Tk - Tq, device=keep.device, dtype=keep.dtype)
+                        keep = torch.cat([pad, keep], dim=-1)
+                    padding_bias   = torch.zeros(B, 1, 1, Tk, device=q.device, dtype=q.dtype).masked_fill(
+                        ~keep[:, None, None, :], neg
+                    )
+                    attn_mask_sdpa = causal_bias + padding_bias                      # [B,n_head,Tq,Tk] via broadcast
+                    is_causal      = False  # causality already encoded in causal_bias
+                # attention_weights = q @ k_t * scale               → fused inside SDPA
+                # attention_weights_masked                           → driven by attn_mask_sdpa / is_causal
+                # attention_weights_probability = dropout(softmax()) → dropout_p passed directly
+                dropout_p = self.config.dropout if self.training else 0.0
+                # Weighted sum of value vectors → new representation
+                s = F.scaled_dot_product_attention(
+                    q, k_total, v_total,
+                    attn_mask=attn_mask_sdpa, dropout_p=dropout_p, is_causal=is_causal,
+                )                                                                    # [B,n_head,T_q,D]
+            # s: [B, n_head, T_q, D]
             output = s.transpose(1,2).contiguous().view(B, Tq, H * D) # n_head * D = D_model
             projection = self.out_proj(output)
             y_t = self.dropout(projection)
