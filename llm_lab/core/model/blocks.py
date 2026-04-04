@@ -26,6 +26,7 @@ class TransformerBlockConfig:
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
     use_sdpa: bool = False   # passed through to MultiHeadAttentionConfig
+    qk_norm: bool = False    # passed through to MultiHeadAttentionConfig
 
 
 class TransformerBlock(nn.Module):
@@ -47,7 +48,8 @@ class TransformerBlock(nn.Module):
                                                     num_kv_heads = config.num_kv_heads,
                                                     rope_scaling_type=config.rope_scaling_type,
                                                     rope_scaling_factor=config.rope_scaling_factor,
-                                                    use_sdpa=config.use_sdpa)
+                                                    use_sdpa=config.use_sdpa,
+                                                    qk_norm=config.qk_norm)
         self.attn = MultiHeadAttention(attention_config)
 
         #FF Layer

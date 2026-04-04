@@ -2,13 +2,14 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List,Dict,Tuple
+import inspect
 import torch
 
 @dataclass(frozen=True)
 class OptimConfig:
     lr : float
     weight_decay: float 
-    betas : Tuple[float,float] = (0.9,0.999)
+    betas : Tuple[float,float] = (0.9,0.95)
     eps : float = 1e-8
 
 def build_adamw_with_decay_groups(model: torch.nn.Module, cfg: OptimConfig)  -> Tuple[torch.optim.Optimizer,List[Dict]]:
@@ -21,7 +22,10 @@ def build_adamw_with_decay_groups(model: torch.nn.Module, cfg: OptimConfig)  -> 
     for name,p in model.named_parameters():
         if p.requires_grad == False:
             continue
-        if p.ndim == 1:
+        if 'embed' in name or 'lm_head' in name:
+            no_decay.append(p)
+            no_decay_names.append(name)
+        elif p.ndim == 1:
             no_decay.append(p)
             no_decay_names.append(name)
         else:
@@ -36,5 +40,11 @@ def build_adamw_with_decay_groups(model: torch.nn.Module, cfg: OptimConfig)  -> 
         {"params": no_decay, "weight_decay": 0.0, "names": no_decay_names},
     ]
 
-    opt = torch.optim.AdamW(param_groups,lr = cfg.lr,betas = cfg.betas,eps = cfg.eps)
+    # fused AdamW is only supported on CUDA; fall back to standard on cpu/mps.
+    fused_available = (
+        'fused' in inspect.signature(torch.optim.AdamW).parameters
+        and all(p.device.type == 'cuda' for p in decay + no_decay)
+    )
+    opt = torch.optim.AdamW(param_groups, lr=cfg.lr, betas=cfg.betas, eps=cfg.eps,
+                            fused=fused_available)
     return opt, {"decay": decay_names, "no_decay": no_decay_names}

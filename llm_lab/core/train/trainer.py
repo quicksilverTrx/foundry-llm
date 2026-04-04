@@ -7,8 +7,9 @@ from typing import Optional, Callable, Literal
 import contextlib
 
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from llm_lab.core.train.optim import build_adamw_with_decay_groups, OptimConfig
+from llm_lab.core.train.lr_schedule import cosine_with_warmup
 import torch
 import csv
 from pathlib import Path
@@ -36,6 +37,7 @@ class TrainerConfig:
     lr_schedule_type: Literal["constant", "cosine"] = "constant"
     lr_warmup_steps: int = 0
     lr_min: float = 0.0
+    val_steps: Optional[int] = None  # alias for eval_max_batches; required when val_loader is IterableDataset
     progress_enabled: bool = True
     progress_update_every_n_steps: Optional[int] = None
 
@@ -111,33 +113,39 @@ class Trainer:
     def _autocast_context(self):
         if self.config.dtype != "bf16":
             return contextlib.nullcontext()
-        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        # Use actual device type so the context works on any CUDA device.
+        # (bf16 is still gated to CUDA-only via the __init__ guard above.)
+        return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16)
 
     def _set_optimizer_lr(self, lr_value: float) -> None:
         for group in self.optimizer.param_groups:
             group["lr"] = float(lr_value)
 
     def _lr_for_step(self, step: int) -> float:
-        base_lr = float(self.config.lr)
-        min_lr = float(self.config.lr_min)
-        warmup_steps = int(self.config.lr_warmup_steps)
-        schedule = self.config.lr_schedule_type
+        """
+        Return the learning rate for optimizer step `step` (0-indexed).
 
-        if schedule == "constant":
-            return base_lr
+        For lr_schedule_type="cosine" this delegates to cosine_with_warmup so
+        the schedule is bit-for-bit identical to ShardTrainer:
+            step 0  → max_lr / warmup_steps   (first warm-up step, non-zero)
+            step warmup_steps → max_lr         (peak)
+            step max_steps    → min_lr         (floor, stays there)
+        """
+        if self.config.lr_schedule_type == "constant":
+            return float(self.config.lr)
 
-        if warmup_steps > 0 and step <= warmup_steps:
-            return base_lr * (float(step) / float(warmup_steps))
-
+        # cosine schedule — requires max_steps to be set
         max_steps = self.config.max_steps
         if max_steps is None or max_steps <= 0:
-            return base_lr
+            return float(self.config.lr)
 
-        decay_steps = max(1, int(max_steps) - warmup_steps)
-        progress = (float(step) - float(warmup_steps)) / float(decay_steps)
-        progress = min(max(progress, 0.0), 1.0)
-        cosine_coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return min_lr + (base_lr - min_lr) * cosine_coeff
+        return cosine_with_warmup(
+            step,
+            warmup_steps=int(self.config.lr_warmup_steps),
+            max_steps=int(max_steps),
+            max_lr=float(self.config.lr),
+            min_lr=float(self.config.lr_min),
+        )
 
     @staticmethod
     def progress_stats(*, start_time: float, step: int, max_steps: Optional[int], now: Optional[float] = None) -> dict[str, float | int | None]:
@@ -209,8 +217,14 @@ class Trainer:
         self.model.train()
         total_loss = 0.0
         micro_batches = 0
-        if len(self.train_loader) <=0 :
-            raise ValueError ("train_loader is empty")
+        # IterableDataset has no __len__; guard against calling len() on it.
+        _loader_has_len = not isinstance(self.train_loader.dataset, IterableDataset)
+        if _loader_has_len and len(self.train_loader) <= 0:
+            raise ValueError("train_loader is empty")
+        if not _loader_has_len and self.config.max_steps is None:
+            raise ValueError(
+                "max_steps must be set in TrainerConfig when training with an IterableDataset"
+            )
         grad_accum_steps = int(self.config.grad_accum_steps)
         if grad_accum_steps <= 0:
             raise ValueError(f"grad_accum_steps must be > 0, got {grad_accum_steps}")
@@ -236,12 +250,16 @@ class Trainer:
             accum_loss += loss_item
             accum_count += 1
 
-            is_last_batch = (i + 1) >= len(self.train_loader)
+            # IterableDataset has no __len__, so is_last_batch is always False;
+            # max_steps (checked above) ensures the loop terminates.
+            is_last_batch = _loader_has_len and (i + 1) >= len(self.train_loader)
             should_step = (accum_count >= grad_accum_steps) or is_last_batch
             if not should_step:
                 continue
 
-            scheduled_lr = self._lr_for_step(self.global_step + 1)
+            # Pass current global_step (0-indexed) so the schedule matches
+            # ShardTrainer's cosine_with_warmup(step, ...) call exactly.
+            scheduled_lr = self._lr_for_step(self.global_step)
             self._set_optimizer_lr(scheduled_lr)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
             self.optimizer.step()
@@ -288,7 +306,7 @@ class Trainer:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
                     with self._autocast_context():
-                        outputs ,_= self.model(inputs,attention_mask = None, past_key_values = None, use_cache = False) 
+                        outputs ,_= self.model(inputs,attention_mask = None, past_key_values = None, use_cache = False)
                         B,T,V = outputs.shape
                         outputs_flat = outputs.reshape(B*T,V)
                         labels_flat = labels.reshape(B*T)

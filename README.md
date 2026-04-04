@@ -1,105 +1,240 @@
 # foundry-llm
 
-An experimental, minimal GPT-style language model lab for learning and iterating on
-decoder-only Transformers.
+`foundry-llm` began as a compact educational decoder-only transformer lab and has gradually grown into a more realistic experimentation stack. The repository still optimizes for readability and iteration speed, but `main` now includes stronger architecture choices, package contracts, tokenizer identity rules, cache-aware inference plumbing, richer trainer controls, and a full shard-based pretraining pipeline.
 
-## Highlights
-- MiniGPT: decoder-only Transformer with multi-head attention (MHA)
-- Positional encodings: learned, sinusoidal, or RoPE
-- Normalization: LayerNorm or RMSNorm
-- MLP: GELU or SwiGLU variants
-- Tokenization: character-level and a simple BPE subword tokenizer
-- Training utilities with CSV logging and optional sample callbacks
-- Sampling: greedy, temperature, top-k, and top-p (nucleus)
-- Model packaging: save/load config + tokenizer + checkpoint
+The center of gravity is still a compact `MiniGPT` implementation and a script-first workflow. What changed is the engineering surface around it: tokenizer behavior is treated as a contract, package reload paths are explicit, architecture variants are first-class, and the data path now carries reproducibility and provenance requirements. It is still not a production platform, but it is no longer just a toy MiniGPT repo.
+
+---
+
+## Current capabilities
+
+### Model and inference
+
+- `MiniGPT` is a decoder-only transformer with configurable normalization, MLP variant, attention type, and positional encoding.
+- Attention supports standard multi-head attention (`mha`) and grouped-query attention (`gqa`), with `nanollama`-style architecture invariants enforced through config.
+- Positional handling includes learned embeddings, sinusoidal embeddings, and RoPE, with RoPE scaling controls exposed as part of model configuration.
+- The forward API supports `attention_mask`, `past_key_values`, and `use_cache`, returning logits plus cache state in a decode-ready shape.
+- KV cache uses a canonical per-layer `(k, v)` layout and decode-aware causal masking so cached decode and full-sequence execution share one contract.
+- Optional `F.scaled_dot_product_attention` (Flash Attention) via `use_sdpa=True`; QK-Norm for GQA via `qk_norm=True`.
+
+### Training and experimentation
+
+- `Trainer` supports `Adam` and decay-group-aware `AdamW`, with optimizer selection exposed through config.
+- Training supports gradient accumulation and keeps logging aligned to optimizer-step semantics.
+- Scheduling includes constant and cosine LR policies, linear warmup, and LR floor.
+- `ShardTrainer` is a step-based pretraining loop that consumes `.npy` shards directly — no DataLoader wrapping needed.
+- `ShardLoader` provides both `next_batch()` for step-based loops and `as_iterable_dataset()` for DataLoader-based experiments.
+- Runtime controls: CUDA bf16 autocast, best-checkpoint handling, CSV loss curves, status curves, progress telemetry.
+
+### Tokenization and data
+
+- `CharTokenizer` is the minimal baseline path for early workflows.
+- `SubwordTokenizer` is a stable facade over legacy BPE and SentencePiece backends.
+- Reserved tokens `<|pad|>`, `<|user|>`, `<|assistant|>`, `<|endoftext|>` are fixed across all tokenizer backends.
+- Tokenizer artifacts are backend-aware and carry behavior-based identity through hashing.
+- FineWeb-Edu pipeline: `data/prepare_dataset.py` streams from HuggingFace, tokenizes with GPT-2 BPE (tiktoken), and writes `uint16 .npy` shards for `ShardLoader`/`ShardTrainer`.
+
+### Testing and validation
+
+- `tests/core` covers forward contracts, decoding, RoPE, GQA, norms, MLP variants, trainer semantics, tokenizer IO, and package IO.
+- Deterministic contract tests for tokenizer identity, shard provenance, and boundary-safe sample generation.
+- New: `test_shard_trainer.py`, `test_shard_loader.py`, `test_lr_schedule.py`, `test_trainer_shard_compat.py`.
+
+---
+
+## NanoLlama 8L — flagship result
+
+The lab culminated in training **NanoLlama 8L**: a 127.6 M-parameter
+LLaMA-family model pretrained on FineWeb-Edu (GPT-2 BPE, 2.5 B tokens,
+RTX 4090, ~9 hours).
+
+```
+Architecture  : 8 layers · d_model=768 · 12 heads · GQA (kv=4) · SwiGLU · RMSNorm · RoPE
+Parameters    : 127.6 M  (no weight tying)
+Training data : FineWeb-Edu 10B sample (Hugging Face, educational text)
+Tokeniser     : GPT-2 BPE via tiktoken (vocab 50 304)
+Compute       : 1× RTX 4090, ~9.2 h wall time, ~75 940 tok/s
+```
+
+### Results vs published baselines
+
+All numbers are on the **same FineWeb-Edu validation shard** with the same
+GPT-2 BPE tokeniser (bytes/token = 4.766, measured from the actual val shard).
+
+| Model | Arch | Tokens | Val loss | BPB |
+|---|---|---|---|---|
+| **NanoLlama 8L (ours)** | LLaMA-family (GQA + SwiGLU + RoPE + RMSNorm) | **2.5 B** | **3.3566** | **1.016** |
+| GPT-2 124M baseline | Vanilla GPT-2 (MHA + GELU + LN + learned pos) | 10 B | 3.29 | 0.996 |
+| GPT-2 124M baseline | Vanilla GPT-2 | 1.05 B | 3.6273 | 1.098 |
+| NanoLlama @ 1.05 B tok | LLaMA-family | 1.05 B | ~3.589 | ~1.088 |
+
+```mermaid
+xychart-beta
+    title "FineWeb-Edu Validation: Bits per Byte (lower is better)"
+    x-axis ["GPT-2 1.05B", "NanoLlama 1.05B", "NanoLlama 2.5B", "GPT-2 10B"]
+    y-axis "BPB" 0.98 --> 1.11
+    bar [1.098, 1.088, 1.016, 0.996]
+```
+
+**At compute-matched 1.05 B tokens**, NanoLlama is already 0.010 BPB ahead
+of the vanilla GPT-2 baseline — the LLaMA-family architecture pays off even
+before seeing more data.
+
+**At 2.5 B tokens**, NanoLlama is only 0.020 BPB behind the 10 B-token GPT-2
+reference — closing 4× the token gap with a better architecture.
+
+**HellaSwag (10,042 items, normalized accuracy): 0.2696** — above random (0.25)
+and above the Phase 4 baseline (~0.238 at 1.05B tokens).
+See `experiments/tinyllama_pretrain_2026-03-31/phase6/hellaswag_eval.py`.
+
+### Val loss trajectory
+
+```
+step  250  →  5.19   (still in warmup)
+step  500  →  4.36
+step 1000  →  3.87
+step 2000  →  3.58
+step 3000  →  3.45
+step 4000  →  3.38
+step 4768  →  3.36   ← final checkpoint
+```
+
+Loss curve shows healthy cosine decay with no instabilities.
+
+
+
+## Reproduce in two commands
+
+```bash
+# Step 1 — download and tokenise FineWeb-Edu (~45 min, ~20 GB disk)
+python data/prepare_dataset.py
+
+# Step 2 — train NanoLlama 8L (~9 h on a single RTX 4090)
+python scripts/pretrain_nanollama.py
+```
+
+All hyperparameters live in `configs/nanollama_8l.json`.
+Checkpoints are saved every 500 steps; the script auto-detects CUDA / MPS / CPU.
+
+```bash
+# Shorter smoke test (5 steps, any hardware):
+python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
+```
+
+---
+
+## Evolution / decision log
+
+- **2025-12-05 to 2025-12-11** — establish the teaching baseline with char tokenization, char datasets, attention, transformer blocks, `MiniGPT`, trainer, and sampling.
+- **2025-12-13 to 2025-12-30** — expand the lab into a usable experimentation repo with subword tokenization, package IO, config loading, training and sampling scripts, positional encoding variants, and broader test coverage.
+- **2026-01-01** — add benchmarking scripts and optimize attention hot paths.
+- **2026-01-07 to 2026-01-09** — move toward a more realistic decoder architecture with GQA, fixed reserved-token ABI, GPT-style pretokenization, RoPE scaling, and `nanollama`-family invariants.
+- **2026-02-22** — add AdamW decay groups and cleaner optimizer handling in the trainer.
+- **Early March 2026** — add KV-cache-aware inference contracts, decode-aware masking, and canonical cache layout through the model stack.
+- **Mid March 2026** — add stronger trainer runtime controls: accumulation, scheduling, bf16 support, checkpoint handling, and progress/status telemetry.
+- **Late March 2026** — add SentencePiece-backed tokenizer artifacts, behavior-based tokenizer hashing, and the deterministic `tinyllama_p15` pretok shard pipeline.
+- **Phase 4 (March 2026)** — reproduce GPT-2 124M on FineWeb-Edu as a calibration baseline: val loss 3.6273 at 1.05 B tokens.
+- **Phase 5 (March 2026)** — 8-run architecture ablation isolating the contribution of RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, and logit softcap. RoPE (−0.386) and SwiGLU (−0.139) dominate.
+- **Phase 6 (March 2026)** — full NanoLlama 8L pretraining run: 4 768 steps, 2.5 B tokens, RTX 4090, ~9 h. Final val loss 3.3566 (BPB 1.016). HellaSwag: 0.2696.
+
+---
 
 ## Repository layout
-- `llm_lab/core/model`: attention, blocks, MLP, norms, MiniGPT, positional encodings
-- `llm_lab/core/tokenization`: `CharTokenizer` and `SubwordTokenizer` (BPE)
-- `llm_lab/core/data`: `CharDataset` and `LanguageModelingDataset`
-- `llm_lab/core/train`: `Trainer` + `TrainerConfig`
-- `llm_lab/core/decode`: sampling helpers
-- `llm_lab/core/package`: package layout + IO helpers
-- `llm_lab/utils`: config loading and misc utilities
-- `scripts/`: runnable experiments and sampling entry points
-- `configs/`: example model config JSON
-- `tests/`: unit and smoke tests
-- `data/`: local text corpora (expected by training scripts)
-- `experiments/`: local run outputs (logs, checkpoints, analysis)
-- `artifacts/`: packaged models (config + tokenizer + checkpoints)
+
+```
+foundry-llm/
+├── configs/
+│   ├── nanollama_8l.json          ← NanoLlama Phase 6 config (model + training)
+│   └── p1/                        ← toy experiment configs
+├── data/
+│   └── prepare_dataset.py         ← download + tokenise FineWeb-Edu into .npy shards
+├── scripts/
+│   ├── pretrain_nanollama.py      ← two-command pretraining entry point
+│   └── p1_*, p2_*, p3_*, p15_*   ← earlier experiment scripts
+├── llm_lab/core/
+│   ├── model/                     ← MiniGPT, attention (MHA/GQA/SDPA), blocks, norms
+│   ├── train/                     ← Trainer, ShardTrainer, lr_schedule, AdamW groups
+│   ├── data/                      ← ShardLoader, CharDataset, LanguageModelingDataset
+│   ├── decode/                    ← greedy, temperature, top-k, top-p sampling
+│   ├── tokenization/              ← CharTokenizer, SubwordTokenizer (BPE + SentencePiece)
+│   └── package/                   ← model packaging I/O
+├── experiments/
+│   └── tinyllama_pretrain_2026-03-31/
+│       ├── phase6/
+│       │   ├── hellaswag_eval.py  ← real HellaSwag benchmark (10 042 items)
+│       │   ├── interact.py        ← interactive sampling REPL
+│       │   └── trajectory.csv     ← step-by-step loss / LR / val
+│       └── README.md              ← full Phase 4–6 results and analysis
+└── tests/core/                    ← unit + smoke tests
+```
+
+---
 
 ## Setup
-Requirements:
-- Python 3.11+
-- PyTorch (install separately; not pinned in `pyproject.toml`)
 
-Suggested local setup:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install torch
-pip install -e .
-```
-
-Or install exact versions from the current `requirements.txt`:
-```bash
 pip install -r requirements.txt
 ```
 
-If you use conda, align your env with `requirements.txt` (pip subset) or
-install PyTorch via your preferred conda channel.
+Notes:
+- `sentencepiece` is required for the SentencePiece tokenizer backend.
+- `datasets` and `tiktoken` are required for FineWeb-Edu prep (`data/prepare_dataset.py`).
+- bf16 training is supported on CUDA only.
 
-## Quickstart (toy char model)
-```bash
-python scripts/p1_train_char.py
-```
+---
 
 ## Training scripts
+
 Character-level:
-- `python scripts/p1_train_char.py`: tiny "hello world" example
-- `python scripts/p1_train_char_real.py`: real-text training on `data/tiny_shakespeare.txt`
-- `python scripts/p1_train_char_sanity_check.py`: quick sanity run with a small slice
-- `python scripts/p1_env_sanity.py`: quick device sanity check (CPU/MPS/CUDA)
+- `python scripts/p1_train_char.py` — tiny "hello world" example
+- `python scripts/p1_train_char_real.py` — real-text training on `data/tiny_shakespeare.txt`
+- `python scripts/p1_env_sanity.py` — device sanity check (CPU/MPS/CUDA)
 
 Subword (BPE):
-- `python scripts/p2_train_bpe.py`: train BPE tokenizer, build LM datasets, train MiniGPT, save package
+- `python scripts/p2_train_bpe.py` — train BPE tokenizer + MiniGPT, save model package
 
 Positional encodings:
-- `python scripts/p3_train_posenc.py`: compare learned, sinusoidal, and RoPE configs
+- `python scripts/p3_train_posenc.py` — compare learned, sinusoidal, and RoPE configs
 
-Benchmarks / analysis:
-- `python scripts/p1_bench_attention.py`: attention performance micro-benchmark
-- `python scripts/p1_bench_step.py`: single-step throughput benchmark
-- `python scripts/p1_collect_phase4_numbers.py`: collect run metrics for reporting
+Pretraining:
+- `python data/prepare_dataset.py` — download + tokenise FineWeb-Edu
+- `python scripts/pretrain_nanollama.py` — full NanoLlama 8L pretraining run
 
-## Sampling scripts
-Character-level:
-- `python scripts/p1_sample_char.py` (expects a run directory + vocab file)
+---
 
-Subword (BPE):
-- `python scripts/p2_sample_bpe.py` (expects a saved model package)
+## Tests
 
-Tip: several scripts have hard-coded paths (for example, `experiments/...` and
-`artifacts/...`). Update those paths if you use a different output layout.
-
-## Data expectations
-Most training scripts assume a text corpus at:
+```bash
+pytest -q
+pytest tests/core/test_shard_trainer.py -v    # ShardTrainer step loop
+pytest tests/core/test_lr_schedule.py -v      # LR schedule functions
+pytest tests/core/test_shard_loader.py -v     # ShardLoader / IterableDataset
 ```
-data/tiny_shakespeare.txt
-```
-You can replace this with any plain-text file; update the scripts as needed.
 
-## Model API (MiniGPT)
-`MiniGPT.forward(...)` returns a tuple:
+---
+
+## Model API
+
 ```python
-logits, past = model(input_ids)
-```
-`past_key_values` and `attention_mask` are not implemented yet, so pass
-`None` (the training and sampling helpers already do this).
+import torch
+from llm_lab.core.model.gpt import MiniGPT, MiniGPTConfig
 
-## Packaging
-Use `llm_lab/core/package/io.py` to save/load a package:
+# Load pretrained NanoLlama 8L
+ckpt = torch.load(
+    "experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt",
+    map_location="cpu",
+)
+model = MiniGPT(MiniGPTConfig(**ckpt["config"]))
+model.load_state_dict(ckpt["model_state_dict"])
+model.eval()
+
+logits, _ = model(input_ids)   # logits: [B, T, vocab_size]
+```
+
+Packaging (for smaller models):
 ```python
 from llm_lab.core.package.io import save_model_package, load_model_package
 
@@ -107,38 +242,11 @@ save_model_package("artifacts/my_run", config, tokenizer, model, is_best=True)
 cfg, tok, model = load_model_package("artifacts/my_run")
 ```
 
-Package layout:
-```
-<package>/
-  config.json
-  tokenizer/
-    vocab.json
-    merges.txt
-  checkpoints/
-    best_val.pt
-```
+---
 
-## Configuration
-Example configs:
-- `configs/p1/gpt_small_subword.json`
-- `configs/p1/gpt_small_rope.json`
-- `configs/p1/gpt_small_sinusoidal.json`
+## Known limits
 
-You can load JSON configs into dataclasses with:
-```python
-from llm_lab.utils.config_loader import load_json_config
-from llm_lab.core.model.gpt import MiniGPTConfig
-
-cfg = load_json_config("configs/p1/gpt_small_subword.json", MiniGPTConfig)
-```
-
-## Tests
-Run the test suite with:
-```bash
-pytest
-```
-
-## Known limitations (current)
-- `attention_mask` and KV cache are stubbed; they raise `NotImplementedError`
-- Only MHA is implemented (`attention_type` is a placeholder for now)
-- BPE tokenizer is a simple, educational implementation (not SentencePiece)
+- The repo is script-first rather than a unified CLI or application.
+- bf16 training is CUDA-only; MPS/CPU run fp32.
+- Greedy decoding produces repetition loops — expected for pretrain-only models. Use nucleus sampling.
+- This is an experimentation lab, not a production training or serving system.

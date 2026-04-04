@@ -31,8 +31,11 @@ class MiniGPTConfig:
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
     arch_family :Literal["miniGPT","nanollama"] = "miniGPT"
-    tie_weights: bool = False
-    use_sdpa: bool = False   # enables F.scaled_dot_product_attention in every attention block
+    tie_weights: bool = False   # share token_embed ↔ lm_head (saves params; correct for small LLaMA-style models)
+    use_sdpa: bool = False      # enable F.scaled_dot_product_attention in every attention block
+
+    logit_softcap: Optional[float] = None
+    qk_norm: bool = False
 
     def __post_init__(self):
         if self.attention_type == "gqa":
@@ -107,8 +110,12 @@ class MiniGPT(nn.Module):
             self.sin_pos = SinusoidalPositionalEncoding(config.block_size, config.d_model)
         #embedding layer
         self.token_embed = nn.Embedding(config.vocab_size,config.d_model)
-        if config.pos_encoding_type != "rope":
-            self.pos_embed = nn.Embedding(config.block_size,config.d_model)
+        # pos_embed is only used for learned/sinusoidal — RoPE injects position via attention
+        self.pos_embed = (
+            nn.Embedding(config.block_size, config.d_model)
+            if config.pos_encoding_type != "rope"
+            else None
+        )
 
         # Blocks
         block_cfg = TransformerBlockConfig(
@@ -124,30 +131,32 @@ class MiniGPT(nn.Module):
             rope_scaling_factor=config.rope_scaling_factor,
             rope_scaling_type = config.rope_scaling_type,
             use_sdpa=config.use_sdpa,
+            qk_norm=config.qk_norm,
         )
 
         self.blocks = nn.ModuleList([TransformerBlock(block_cfg) for _ in range(config.n_layers)])
 
         # Final norm + LM head
         self.ln_f = make_norm(config.norm_type,config.d_model)
-        self.lm_head = nn.Linear(config.d_model,config.vocab_size)
+        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        self._init_weights()
         if config.tie_weights:
-            # Rescale embedding to GPT-standard (std=0.02) before tying.
-            # Default nn.Embedding init is Normal(0,1); tied lm_head would inherit that,
-            # producing logits ~ Normal(0, sqrt(d_model)=22.6) and initial loss >> 9.7.
-            nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
             self.lm_head.weight = self.token_embed.weight
 
-        # Scaled residual init (GPT-2 §2.3).
-        # Residual projections (out_proj in attention, w_down/fc2 in MLP) accumulate into the
-        # residual stream at every layer. Without scaling, activation std grows ~sqrt(n_layers)×,
-        # creating uneven gradient magnitudes across depth. Scaling by 1/sqrt(2*n_layers) keeps
-        # the residual stream variance approximately constant regardless of depth.
-        # std = 0.02 / sqrt(2 * n_layers) = 0.02 / sqrt(36) ≈ 0.00333 for 18 layers.
-        _residual_std = 0.02 / math.sqrt(2 * config.n_layers)
-        for pn, p in self.named_parameters():
-            if pn.endswith("out_proj.weight") or pn.endswith("w_down.weight") or pn.endswith("fc2.weight"):
-                nn.init.normal_(p, mean=0.0, std=_residual_std)
+    def _init_weights(self):
+        std = 1.0 / math.sqrt(self.config.d_model)
+        residual_std = std / math.sqrt(2 * self.config.n_layers)
+        for name, p in self.named_parameters():
+            if p.ndim < 2:
+                continue  # biases: leave as zero
+            if any(x in name for x in ('out_proj', 'w_down', 'fc2')):
+                nn.init.normal_(p, mean=0.0, std=residual_std)
+            else:
+                nn.init.normal_(p, mean=0.0, std=std)
+        # std=0.02 for embedding and lm_head weight (overrides general init)
+        nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
     def forward(self, input_ids: torch.Tensor, 
                 attention_mask : Optional[torch.Tensor] = None,
@@ -182,16 +191,16 @@ class MiniGPT(nn.Module):
         else:
             # Learned/sinusoidal embeddings use absolute indices in the sequence.
             position_indices = torch.arange(past_len, past_len + T,device=input_ids.device) # [T]
-        if self.config.pos_encoding_type=="learned":
+        if self.config.pos_encoding_type == "learned":
+            assert self.pos_embed is not None
             position_embeddings = self.pos_embed(position_indices)
             x = x + position_embeddings
             assert x.ndim == 3, f"pos-embed add must keep x [B,T,D]; got {tuple(x.shape)}"
-        elif self.config.pos_encoding_type =="sinusoidal":
+        elif self.config.pos_encoding_type == "sinusoidal":
             position_embeddings = self.sin_pos(position_indices)
             x = x + position_embeddings
             assert x.ndim == 3, f"pos-embed add must keep x [B,T,D]; got {tuple(x.shape)}"
-        elif self.config.pos_encoding_type =="rope":
-            pass
+        # rope: no additive position encoding — handled per-layer in attention
 
         # Guard against accidental broadcast bugs that introduce an extra batch axis.
         # Expected: x is [B, T, D].
@@ -218,4 +227,7 @@ class MiniGPT(nn.Module):
                 new_past.append(present_key_value)
         x = self.ln_f(x)
         x = self.lm_head(x) # [B, T, vocab_size]
+        if self.config.logit_softcap is not None:
+            cap = self.config.logit_softcap
+            x = cap * torch.tanh(x / cap)
         return x, new_past

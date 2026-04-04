@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from llm_lab.core.model.pos_encodings import apply_rope
+from llm_lab.core.model.norms import RMSNorm
 PastKeyValue = Tuple[torch.Tensor, torch.Tensor]
 PastKeyValues = List[PastKeyValue] # len == n_layers (model-level)
 
@@ -255,6 +256,7 @@ class MultiHeadAttentionConfig:
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
     use_sdpa: bool = False   # propagated to each head (MHA) or used directly (GQA)
+    qk_norm: bool = False    # RMSNorm on Q and K before dot-product (GQA only, LLaMA 3.x style)
 
 class MultiHeadAttention(nn.Module):
     """
@@ -303,6 +305,9 @@ class MultiHeadAttention(nn.Module):
             self.out_proj = nn.Linear(self.d_model,self.d_model)
             self.dropout = nn.Dropout(config.dropout)
             self.use_sdpa = config.use_sdpa
+            if config.qk_norm:
+                self.q_norm = RMSNorm(self.head_dim)
+                self.k_norm = RMSNorm(self.head_dim)
 
 
 
@@ -368,6 +373,10 @@ class MultiHeadAttention(nn.Module):
             # [B, T, d_model] -> [B, T, H_kv * D] -> project to -> [B,H_kv,T,D]
             k = self.k_proj(x).view(B,T,H_kv,D).transpose(1,2)  # [B,H_kv,T_q,D]
             v = self.v_proj(x).view(B,T,H_kv,D).transpose(1,2)  # [B,H_kv,T_q,D]
+            # QK-Norm: normalize Q and K per head before RoPE (LLaMA 3.x style)
+            if self.config.qk_norm:
+                q = self.q_norm(q)
+                k = self.k_norm(k)
             # Expand KV to H heads for compute. Cache stays in base H_kv space.
             k = k.repeat_interleave(repeat,dim=1)
             v = v.repeat_interleave(repeat,dim=1)
