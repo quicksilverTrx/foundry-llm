@@ -1,1 +1,21 @@
 *.pyc
+*.json
+*.bin
+*.log
+*.png
+*.csv
+*.md
+*.txt
+*.ckpt
+*.pt
+*.jsonl
+*.model
+
+# Allow specific tracked docs and results
+!README.md
+!docs/ablation_analysis.md
+!docs/eval_results.md
+!docs/replication.md
+!results/nanollama_8l_training.csv
+!results/ablation_summary.csv
+!data/hellaswag_val.jsonl

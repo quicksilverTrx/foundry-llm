@@ -84,8 +84,8 @@ before seeing more data.
 reference — closing 4× the token gap with a better architecture.
 
 **HellaSwag (10,042 items, normalized accuracy): 0.2696** — above random (0.25)
-and above the Phase 4 baseline (~0.238 at 1.05B tokens).
-See `experiments/tinyllama_pretrain_2026-03-31/phase6/hellaswag_eval.py`.
+and above the GPT-2 baseline (~0.238 at 1.05B tokens).
+See `scripts/eval_hellaswag.py` (`data/hellaswag_val.jsonl` included).
 
 ### Val loss trajectory
 
@@ -132,10 +132,10 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 - **2026-02-22** — add AdamW decay groups and cleaner optimizer handling in the trainer.
 - **Early March 2026** — add KV-cache-aware inference contracts, decode-aware masking, and canonical cache layout through the model stack.
 - **Mid March 2026** — add stronger trainer runtime controls: accumulation, scheduling, bf16 support, checkpoint handling, and progress/status telemetry.
-- **Late March 2026** — add SentencePiece-backed tokenizer artifacts, behavior-based tokenizer hashing, and the deterministic `tinyllama_p15` pretok shard pipeline.
-- **Phase 4 (March 2026)** — reproduce GPT-2 124M on FineWeb-Edu as a calibration baseline: val loss 3.6273 at 1.05 B tokens.
-- **Phase 5 (March 2026)** — 8-run architecture ablation isolating the contribution of RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, and logit softcap. RoPE (−0.386) and SwiGLU (−0.139) dominate.
-- **Phase 6 (March 2026)** — full NanoLlama 8L pretraining run: 4 768 steps, 2.5 B tokens, RTX 4090, ~9 h. Final val loss 3.3566 (BPB 1.016). HellaSwag: 0.2696.
+- **Late March 2026** — add SentencePiece-backed tokenizer artifacts, behavior-based tokenizer hashing, and the deterministic pretokenized shard pipeline.
+- **March 2026 (calibration)** — reproduce GPT-2 124M on FineWeb-Edu as a reference baseline: val loss 3.6273 at 1.05 B tokens.
+- **March 2026 (ablation)** — 8-run architecture ablation isolating the contribution of RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, and logit softcap. RoPE (−0.386) and SwiGLU (−0.139) dominate.
+- **March 2026 (pretraining)** — full NanoLlama 8L pretraining run: 4 768 steps, 2.5 B tokens, RTX 4090, ~9 h. Final val loss 3.3566 (BPB 1.016). HellaSwag: 0.2696.
 
 ---
 
@@ -144,13 +144,30 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 ```
 foundry-llm/
 ├── configs/
-│   ├── nanollama_8l.json          ← NanoLlama Phase 6 config (model + training)
+│   ├── nanollama_8l.json          ← NanoLlama 8L config (model + training)
 │   └── p1/                        ← toy experiment configs
 ├── data/
-│   └── prepare_dataset.py         ← download + tokenise FineWeb-Edu into .npy shards
+│   ├── prepare_dataset.py         ← download + tokenise FineWeb-Edu into .npy shards
+│   └── hellaswag_val.jsonl        ← HellaSwag val set (10 042 items, ready to use)
 ├── scripts/
 │   ├── pretrain_nanollama.py      ← two-command pretraining entry point
+│   ├── eval_hellaswag.py          ← full HellaSwag benchmark (10 042 items)
+│   ├── eval_suite.py              ← 11-test eval suite (generation, ppl, entropy)
+│   ├── interact.py                ← interactive sampling REPL
 │   └── p1_*, p2_*, p3_*, p15_*   ← earlier experiment scripts
+├── docs/
+│   ├── ablation_analysis.md       ← swap ablation results + confound analysis
+│   ├── eval_results.md            ← full eval suite output + implementation notes
+│   └── replication.md             ← step-by-step reproduction guide
+├── results/
+│   ├── nanollama_8l_training.csv  ← full 4 768-step training trajectory
+│   └── ablation_summary.csv       ← 8-swap ablation table (swap confound flagged)
+├── bin/
+│   ├── push_to_registry.sh        ← build + push Docker image to registry
+│   ├── sync_remote_code.sh        ← rsync source to a running remote pod over SSH
+│   ├── runpod_container_entrypoint.sh ← container entrypoint (SSH + conda env)
+│   └── ...                        ← additional cloud ops helpers
+├── Dockerfile                     ← vastai/pytorch base, CUDA 13.2, Python 3.11
 ├── llm_lab/core/
 │   ├── model/                     ← MiniGPT, attention (MHA/GQA/SDPA), blocks, norms
 │   ├── train/                     ← Trainer, ShardTrainer, lr_schedule, AdamW groups
@@ -158,13 +175,6 @@ foundry-llm/
 │   ├── decode/                    ← greedy, temperature, top-k, top-p sampling
 │   ├── tokenization/              ← CharTokenizer, SubwordTokenizer (BPE + SentencePiece)
 │   └── package/                   ← model packaging I/O
-├── experiments/
-│   └── tinyllama_pretrain_2026-03-31/
-│       ├── phase6/
-│       │   ├── hellaswag_eval.py  ← real HellaSwag benchmark (10 042 items)
-│       │   ├── interact.py        ← interactive sampling REPL
-│       │   └── trajectory.csv     ← step-by-step loss / LR / val
-│       └── README.md              ← full Phase 4–6 results and analysis
 └── tests/core/                    ← unit + smoke tests
 ```
 
@@ -183,6 +193,42 @@ Notes:
 - `sentencepiece` is required for the SentencePiece tokenizer backend.
 - `datasets` and `tiktoken` are required for FineWeb-Edu prep (`data/prepare_dataset.py`).
 - bf16 training is supported on CUDA only.
+
+### Docker (cloud GPU / Vast.ai / RunPod)
+
+A production-ready image is included for remote GPU training:
+
+```bash
+# Build and push to registry (uses BuildKit secret for optional HF auth)
+bin/push_to_registry.sh
+
+# Sync local code changes into a running pod over SSH
+REMOTE_HOST=<host> bin/sync_remote_code.sh
+
+# Local smoke test — builds image and runs verify-local pipeline
+bin/verify_hero_config.sh
+```
+
+Base image: `vastai/pytorch:2.11.0-cu130-cuda-13.2-mini-py311` (PyTorch 2.11, CUDA 13.2, Python 3.11).
+HF token is injected at build time via `--secret id=hf_token` (never stored in image layers).
+See `docs/replication.md` for cloud GPU setup notes (persistent volumes, OOM prevention).
+
+---
+
+## Evaluate
+
+```bash
+# Full 11-test eval suite (generation, perplexity, entropy, HellaSwag proxy)
+python scripts/eval_suite.py --ckpt out/ckpts/step_04768_model_only.pt
+
+# Real HellaSwag benchmark — 10 042 items, ~10 min on CPU (~0.2696 expected)
+python scripts/eval_hellaswag.py --ckpt out/ckpts/step_04768_model_only.pt
+
+# Interactive sampling REPL
+python -i scripts/interact.py --ckpt out/ckpts/step_04768_model_only.pt
+# >>> nucleus("Photosynthesis is")
+# >>> ppl("The mitochondria is the powerhouse of the cell.")
+```
 
 ---
 
@@ -224,7 +270,7 @@ from llm_lab.core.model.gpt import MiniGPT, MiniGPTConfig
 
 # Load pretrained NanoLlama 8L
 ckpt = torch.load(
-    "experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt",
+    "out/ckpts/step_04768_model_only.pt",   # default output path from pretrain_nanollama.py
     map_location="cpu",
 )
 model = MiniGPT(MiniGPTConfig(**ckpt["config"]))

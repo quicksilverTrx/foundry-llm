@@ -1,0 +1,9 @@
+swap,name,features_cumulative,n_layers,attention,norm,mlp,pos_enc,logit_softcap,qk_norm,params_M,val_loss_500,delta_incremental,delta_cumulative,confounded,notes
+0,GPT-2 baseline,baseline,12,mha,layernorm,gelu,learned,none,false,163.16,5.0825,,,false,Internal reference only — untied weights (163M not 124M)
+1,+RoPE,RoPE,12,mha,layernorm,gelu,rope,none,false,162.37,4.6965,-0.3860,-0.3860,false,Largest single gain
+2,+RMSNorm,RoPE+RMSNorm,12,mha,rmsnorm,gelu,rope,none,false,162.35,4.7127,+0.0162,-0.3698,false,Slight short-run regression; stability benefit at scale
+3,+logit_softcap=30,RoPE+RMSNorm+softcap,12,mha,rmsnorm,gelu,rope,30,false,162.30,4.7997,CONFOUNDED,CONFOUNDED,true,"Three simultaneous changes: softcap (intended) + lm_head.bias=False + token_embed std 0.036→0.02 (both init fixes). Estimated true softcap delta: ~0 to +0.05 short-run convergence penalty"
+4,+QK-Norm,RoPE+RMSNorm+softcap+QKNorm,12,gqa_kv12,rmsnorm,gelu,rope,30,true,162.31,4.7820,-0.0177,-0.3005,false,Also switched MHA→GQA code path (kv=12 = n_heads so mathematically identical)
+5,+SwiGLU,RoPE+RMSNorm+softcap+QKNorm+SwiGLU,12,gqa_kv12,rmsnorm,swiglu,rope,30,true,162.26,4.6430,-0.1390,-0.4395,false,Second strongest gain; d_ff=2048 (SwiGLU) matches params of d_ff=3072 (GELU)
+6,+GQA kv=4,RoPE+RMSNorm+softcap+QKNorm+SwiGLU+GQA,12,gqa_kv4,rmsnorm,swiglu,rope,30,true,152.81,4.6383,-0.0047,-0.4442,false,Negligible quality cost; ~30% KV cache reduction
+7,Full NanoLlama 8L,all features + 8L,8,gqa_kv4,rmsnorm,swiglu,rope,30,true,127.63,4.6918,+0.0535,-0.3907,false,Capacity regression at 500 steps recovers with longer training (NanoLlama 8L final val 3.3566)
