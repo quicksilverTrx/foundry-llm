@@ -106,7 +106,14 @@ def load_model_package(
 
     model = MiniGPT(config)
     ckpt = torch.load(best_checkpoint_path(pkg), map_location=device)
-    model.load_state_dict(ckpt["model_state"])
+    model_keys = set(model.state_dict().keys())
+    ckpt_keys = set(ckpt["model_state"].keys())
+    extra = ckpt_keys - model_keys
+    if extra:
+        filtered = {k: v for k, v in ckpt["model_state"].items() if k in model_keys}
+        model.load_state_dict(filtered, strict=True)
+    else:
+        model.load_state_dict(ckpt["model_state"])
     model.to(device)
 
     return config, tokenizer, model

@@ -150,11 +150,13 @@ foundry-llm/
 │   ├── prepare_dataset.py         ← download + tokenise FineWeb-Edu into .npy shards
 │   └── hellaswag_val.jsonl        ← HellaSwag val set (10 042 items, ready to use)
 ├── scripts/
-│   ├── pretrain_nanollama.py      ← two-command pretraining entry point
-│   ├── eval_hellaswag.py          ← full HellaSwag benchmark (10 042 items)
-│   ├── eval_suite.py              ← 11-test eval suite (generation, ppl, entropy)
 │   ├── interact.py                ← interactive sampling REPL
-│   └── p1_*, p2_*, p3_*, p15_*   ← earlier experiment scripts
+│   ├── core/                      ← model training & benchmarking
+│   ├── serving/                   ← inference API, quantization, benchmarks
+│   ├── eval/                      ← evaluation & evidence pack
+│   ├── pretrain/                  ← NanoLlama pretraining entry point
+│   ├── data/                      ← data preparation & shards
+│   └── research/                  ← research lane & overnight scripts
 ├── docs/
 │   ├── ablation_analysis.md       ← swap ablation results + confound analysis
 │   ├── eval_results.md            ← full eval suite output + implementation notes
@@ -235,19 +237,29 @@ python -i scripts/interact.py --ckpt out/ckpts/step_04768_model_only.pt
 ## Training scripts
 
 Character-level:
-- `python scripts/p1_train_char.py` — tiny "hello world" example
-- `python scripts/p1_train_char_real.py` — real-text training on `data/tiny_shakespeare.txt`
-- `python scripts/p1_env_sanity.py` — device sanity check (CPU/MPS/CUDA)
+- `python scripts/core/train_char.py` — tiny "hello world" example
+- `python scripts/core/train_char_real.py` — real-text training on `data/tiny_shakespeare.txt`
+- `python scripts/core/env_sanity.py` — device sanity check (CPU/MPS/CUDA)
 
 Subword (BPE):
-- `python scripts/p2_train_bpe.py` — train BPE tokenizer + MiniGPT, save model package
+- `python scripts/core/train_bpe.py` — train BPE tokenizer + MiniGPT, save model package
 
 Positional encodings:
-- `python scripts/p3_train_posenc.py` — compare learned, sinusoidal, and RoPE configs
+- `python scripts/core/train_posenc.py` — compare learned, sinusoidal, and RoPE configs
 
 Pretraining:
 - `python data/prepare_dataset.py` — download + tokenise FineWeb-Edu
-- `python scripts/pretrain_nanollama.py` — full NanoLlama 8L pretraining run
+- `python scripts/pretrain/pretrain_nanollama.py` — full NanoLlama 8L pretraining run
+
+Serving:
+- `python scripts/serving/serve.py` — start FastAPI inference server
+- `python scripts/serving/serving_client.py` — streaming CLI client
+- `python scripts/serving/bench_inference.py` — cache vs recompute benchmarking
+
+Evaluation:
+- `python scripts/eval/eval_hellaswag.py` — full HellaSwag benchmark (10 042 items)
+- `python scripts/eval/eval_suite.py` — 11-test eval suite (generation, ppl, entropy)
+- `python scripts/eval/eval_prompt_suite.py` — prompt suite runner with safety checks
 
 ---
 

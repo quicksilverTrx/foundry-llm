@@ -1,4 +1,4 @@
-# scripts/p3_train_posenc.py
+# scripts/train_posenc.py
 from __future__ import annotations
 
 import argparse
