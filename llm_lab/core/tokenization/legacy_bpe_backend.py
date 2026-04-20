@@ -12,7 +12,7 @@ PretokenizeFn = Callable[[str], List[str]]
 
 class LegacyBPEBackend:
     """
-    Legacy char-level BPE backend retained for tinyllama_p15 compatibility.
+    Legacy char-level BPE backend retained for sp16k compatibility.
     """
 
     backend_family = "legacy_bpe"

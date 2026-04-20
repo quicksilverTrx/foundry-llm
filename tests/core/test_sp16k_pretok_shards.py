@@ -14,13 +14,13 @@ if str(REPO_ROOT) not in sys.path:
 from llm_lab.core.data.pretok_shards import (
     ROOT_MANIFEST_FILENAME,
     PRETOK_FORMAT_VERSION,
-    TinyLlamaP15DocSpan,
-    TinyLlamaP15ShardSidecar,
+    Sp16kDocSpan,
+    Sp16kShardSidecar,
     _apply_eot_insertion_policy,
     _apply_normalization_policy,
     _resolve_split_membership_semantics,
     _summarize_split_counts,
-    build_tinyllama_p15_pretokenized_shards,
+    build_sp16k_pretokenized_shards,
     build_prep_config_ref,
     chunk_split_token_stream,
     compute_docs_sha256,
@@ -37,7 +37,7 @@ from llm_lab.core.data.pretok_shards import (
     write_uint16_tokens,
 )
 from llm_lab.core.tokenization.subword_tokenizer import SubwordTokenizer, SubwordTokenizerConfig
-from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import (
+from llm_lab.core.tokenization.sp16k_tokenizer_artifact import (
     TOKENIZER_ARTIFACT_FILENAMES,
     build_tokenizer_artifact_from_docs,
     compute_tokenizer_hash,
@@ -55,7 +55,7 @@ from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import (
 
 
 def _script_path() -> Path:
-    return REPO_ROOT / "scripts" / "tinyllama_p15_pretokenize_shards.py"
+    return REPO_ROOT / "experiments" / "p15_archive" / "scripts" / "tinyllama_p15_pretokenize_shards.py"
 
 
 def test_split_manifest_structure_and_provenance_checks() -> None:
@@ -92,9 +92,9 @@ def test_deterministic_shard_naming_and_chunking() -> None:
 
     token_stream = list(range(10))
     spans = [
-        TinyLlamaP15DocSpan(global_doc_index=0, start_token=0, end_token=3),
-        TinyLlamaP15DocSpan(global_doc_index=1, start_token=3, end_token=7),
-        TinyLlamaP15DocSpan(global_doc_index=2, start_token=7, end_token=10),
+        Sp16kDocSpan(global_doc_index=0, start_token=0, end_token=3),
+        Sp16kDocSpan(global_doc_index=1, start_token=3, end_token=7),
+        Sp16kDocSpan(global_doc_index=2, start_token=7, end_token=10),
     ]
     chunks = chunk_split_token_stream(
         split="train",
@@ -130,7 +130,7 @@ def test_checksum_stability(tmp_path: Path) -> None:
 
 
 def test_sidecar_schema_write_read(tmp_path: Path) -> None:
-    sidecar = TinyLlamaP15ShardSidecar(
+    sidecar = Sp16kShardSidecar(
         format_version=PRETOK_FORMAT_VERSION,
         filename="train_000000.bin",
         split="train",
@@ -283,9 +283,9 @@ def test_apply_eot_insertion_policy_appends_final_eot() -> None:
     )
     assert stream == [11, 12, 3, 3, 99, 3]
     assert spans == [
-        TinyLlamaP15DocSpan(global_doc_index=0, start_token=0, end_token=3),
-        TinyLlamaP15DocSpan(global_doc_index=4, start_token=3, end_token=4),
-        TinyLlamaP15DocSpan(global_doc_index=8, start_token=4, end_token=6),
+        Sp16kDocSpan(global_doc_index=0, start_token=0, end_token=3),
+        Sp16kDocSpan(global_doc_index=4, start_token=3, end_token=4),
+        Sp16kDocSpan(global_doc_index=8, start_token=4, end_token=6),
     ]
 
 
@@ -293,8 +293,8 @@ def test_summarize_split_counts_includes_eot_tokens() -> None:
     docs = ["a", "b"]
     stream = [10, 3, 11, 3]
     spans = [
-        TinyLlamaP15DocSpan(global_doc_index=0, start_token=0, end_token=2),
-        TinyLlamaP15DocSpan(global_doc_index=1, start_token=2, end_token=4),
+        Sp16kDocSpan(global_doc_index=0, start_token=0, end_token=2),
+        Sp16kDocSpan(global_doc_index=1, start_token=2, end_token=4),
     ]
     doc_count, token_count = _summarize_split_counts(
         split_docs=docs,
@@ -308,7 +308,7 @@ def test_summarize_split_counts_includes_eot_tokens() -> None:
         _summarize_split_counts(split_docs=docs, split_token_stream=stream, doc_spans=spans[:1])
 
 
-def test_build_tinyllama_p15_pretokenized_shards_e2e(tmp_path: Path) -> None:
+def test_build_sp16k_pretokenized_shards_e2e(tmp_path: Path) -> None:
     # Keep a shared symbol inventory across docs so val docs remain encodable with a train-only tokenizer.
     docs = ["ab ab", "ba ab", "aa bb", "bb aa"]
     input_file = tmp_path / "docs.txt"
@@ -329,7 +329,7 @@ def test_build_tinyllama_p15_pretokenized_shards_e2e(tmp_path: Path) -> None:
     )
 
     out_dir = tmp_path / "shards"
-    root_manifest_path = build_tinyllama_p15_pretokenized_shards(
+    root_manifest_path = build_sp16k_pretokenized_shards(
         input_file=input_file,
         tokenizer_artifact_dir=tok_dir,
         split_manifest_path=split_manifest_path,
@@ -352,3 +352,39 @@ def test_build_tinyllama_p15_pretokenized_shards_e2e(tmp_path: Path) -> None:
         assert sidecar["format_version"] == PRETOK_FORMAT_VERSION
         assert sidecar["dtype"] == "uint16"
         assert sidecar["token_count"] >= sidecar["document_count"]
+
+
+def test_build_sp16k_pretokenized_shards_streams_input_file(monkeypatch, tmp_path: Path) -> None:
+    docs = ["ab ab", "ba ab", "aa bb", "bb aa"] * 64
+    input_file = tmp_path / "docs.txt"
+    input_file.write_text("\n".join(docs) + "\n", encoding="utf-8")
+
+    tok_dir = tmp_path / "tok"
+    build_tokenizer_artifact_from_docs(
+        docs=docs,
+        output_dir=tok_dir,
+        vocab_size=80,
+        train_ratio=0.75,
+        split_seed=2,
+    )
+    split_manifest_path = tok_dir / TOKENIZER_ARTIFACT_FILENAMES["split_manifest"]
+    out_dir = tmp_path / "shards"
+
+    original_read_text = Path.read_text
+
+    def _guarded_read_text(self: Path, *args, **kwargs):
+        if self == input_file:
+            raise AssertionError("input_file.read_text() should not be used by shard building")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _guarded_read_text)
+
+    root_manifest_path = build_sp16k_pretokenized_shards(
+        input_file=input_file,
+        tokenizer_artifact_dir=tok_dir,
+        split_manifest_path=split_manifest_path,
+        output_dir=out_dir,
+        max_tokens_per_shard=128,
+    )
+
+    assert root_manifest_path.exists()

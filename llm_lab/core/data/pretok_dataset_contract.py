@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import bisect
+import itertools
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 import numpy as np
 
@@ -18,7 +21,7 @@ REQUIRED_SIDECAR_KEYS = frozenset(
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15PretokDatasetConfig:
+class Sp16kPretokDatasetConfig:
     root_dir: Path
     split: RuntimeSplit
     block_size: int
@@ -26,7 +29,7 @@ class TinyLlamaP15PretokDatasetConfig:
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15RuntimeShardRef:
+class Sp16kRuntimeShardRef:
     inventory_index: int
     bin_path: Path
     sidecar_path: Path
@@ -35,28 +38,44 @@ class TinyLlamaP15RuntimeShardRef:
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15ShortShardStats:
+class Sp16kShortShardStats:
     short_shards_skipped: int
     short_tokens_skipped: int
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15RuntimeManifestView:
+class Sp16kRuntimeManifestView:
     split: RuntimeSplit
     block_size: int
-    eligible_shards: list[TinyLlamaP15RuntimeShardRef]
-    short_shard_stats: TinyLlamaP15ShortShardStats
+    eligible_shards: list[Sp16kRuntimeShardRef]
+    short_shard_stats: Sp16kShortShardStats
     total_samples_per_pass: int
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15EpochSamplerPlan:
+class Sp16kEpochSamplerPlan:
     base_seed: int
     epoch: int
     valid_offsets_per_shard: list[int]
     shard_order: list[int]
 
+    def iter_ordered_refs(self) -> Iterator[tuple[int, int]]:
+        num_shards = len(self.valid_offsets_per_shard)
+        for shard_idx in self.shard_order:
+            if shard_idx < 0 or shard_idx >= num_shards:
+                raise ValueError(
+                    f"shard_order contains out-of-range index {shard_idx} for {num_shards} shards"
+                )
+            for offset in iter_affine_offsets_for_shard(
+                valid_offsets=self.valid_offsets_per_shard[shard_idx],
+                base_seed=self.base_seed,
+                epoch=self.epoch,
+                shard_idx=shard_idx,
+            ):
+                yield int(shard_idx), int(offset)
+
     def iter_ordered_pairs(self) -> list[tuple[int, list[int]]]:
+        """Debug helper that groups the streaming epoch plan into per-shard lists."""
         num_shards = len(self.valid_offsets_per_shard)
         for shard_idx in self.shard_order:
             if shard_idx < 0 or shard_idx >= num_shards:
@@ -64,13 +83,65 @@ class TinyLlamaP15EpochSamplerPlan:
                     f"shard_order contains out-of-range index {shard_idx} for {num_shards} shards"
                 )
 
-        rng = build_epoch_rng(self.base_seed, self.epoch)
+        grouped: dict[int, list[int]] = {int(shard_idx): [] for shard_idx in self.shard_order}
+        for shard_idx, offset in self.iter_ordered_refs():
+            grouped[int(shard_idx)].append(int(offset))
+
         out: list[tuple[int, list[int]]] = []
         for shard_idx in self.shard_order:
-            valid_offsets = self.valid_offsets_per_shard[shard_idx]
-            offsets = offset_permutation(valid_offsets=valid_offsets, rng=rng)
-            out.append((shard_idx, offsets))
+            out.append((int(shard_idx), grouped[int(shard_idx)]))
         return out
+
+    def iter_ordered_refs_slice(self, *, sample_start: int, sample_count: int) -> Iterator[tuple[int, int]]:
+        """
+        Streams a contiguous sample slice from the grouped epoch traversal without
+        materializing the full ordered ref list.
+        """
+        _validate_non_negative_int("sample_start", sample_start)
+        _validate_non_negative_int("sample_count", sample_count)
+        total_samples = sum(int(x) for x in self.valid_offsets_per_shard)
+        if sample_start > total_samples:
+            raise ValueError(
+                f"sample_start exceeds total sample count: start={sample_start} total={total_samples}"
+            )
+        if sample_start + sample_count > total_samples:
+            raise ValueError(
+                "requested slice exceeds total sample count: "
+                f"start={sample_start} count={sample_count} total={total_samples}"
+            )
+        if sample_count == 0:
+            return
+
+        ordered_counts = [int(self.valid_offsets_per_shard[shard_idx]) for shard_idx in self.shard_order]
+        cumulative_counts: list[int] = []
+        running_total = 0
+        for count in ordered_counts:
+            running_total += count
+            cumulative_counts.append(running_total)
+
+        ordered_shard_pos = bisect.bisect_right(cumulative_counts, sample_start)
+        previous_total = cumulative_counts[ordered_shard_pos - 1] if ordered_shard_pos > 0 else 0
+        local_start = sample_start - previous_total
+        remaining = sample_count
+
+        for shard_pos in range(ordered_shard_pos, len(self.shard_order)):
+            shard_idx = int(self.shard_order[shard_pos])
+            shard_count = int(self.valid_offsets_per_shard[shard_idx])
+            shard_local_start = local_start if shard_pos == ordered_shard_pos else 0
+            shard_take = min(remaining, shard_count - shard_local_start)
+            offset_iter = iter_affine_offsets_for_shard(
+                valid_offsets=shard_count,
+                base_seed=self.base_seed,
+                epoch=self.epoch,
+                shard_idx=shard_idx,
+            )
+            if shard_local_start > 0:
+                offset_iter = itertools.islice(offset_iter, shard_local_start, None)
+            for offset in itertools.islice(offset_iter, shard_take):
+                yield shard_idx, int(offset)
+            remaining -= shard_take
+            if remaining == 0:
+                break
 
 
 def valid_offset_count(token_count: int, block_size: int) -> int:
@@ -112,7 +183,34 @@ def offset_permutation(*, valid_offsets: int, rng: np.random.Generator) -> list[
     return [int(x) for x in rng.permutation(valid_offsets)]
 
 
-def load_runtime_manifest_view(config: TinyLlamaP15PretokDatasetConfig) -> TinyLlamaP15RuntimeManifestView:
+def iter_affine_offsets_for_shard(
+    *,
+    valid_offsets: int,
+    base_seed: int,
+    epoch: int,
+    shard_idx: int,
+) -> Iterator[int]:
+    _validate_non_negative_int("valid_offsets", valid_offsets)
+    _validate_non_negative_int("epoch", epoch)
+    _validate_non_negative_int("shard_idx", shard_idx)
+    if valid_offsets == 0:
+        return
+    if valid_offsets == 1:
+        yield 0
+        return
+
+    rng = np.random.Generator(
+        np.random.PCG64(np.random.SeedSequence([int(base_seed), int(epoch), int(shard_idx)]))
+    )
+    start = int(rng.integers(0, valid_offsets))
+    raw_step = int(rng.integers(1, valid_offsets))
+    step = _next_coprime_step(start=raw_step, modulus=valid_offsets)
+
+    for i in range(valid_offsets):
+        yield int((start + (i * step)) % valid_offsets)
+
+
+def load_runtime_manifest_view(config: Sp16kPretokDatasetConfig) -> Sp16kRuntimeManifestView:
     _validate_positive_int("block_size", config.block_size)
 
     root_manifest_path = config.root_dir / ROOT_MANIFEST_FILENAME
@@ -128,7 +226,7 @@ def load_runtime_manifest_view(config: TinyLlamaP15PretokDatasetConfig) -> TinyL
     if not isinstance(inventory, list):
         raise ValueError("root manifest shard_inventory must be a list")
 
-    eligible: list[TinyLlamaP15RuntimeShardRef] = []
+    eligible: list[Sp16kRuntimeShardRef] = []
     short_shards = 0
     short_tokens = 0
 
@@ -187,7 +285,7 @@ def load_runtime_manifest_view(config: TinyLlamaP15PretokDatasetConfig) -> TinyL
             continue
 
         eligible.append(
-            TinyLlamaP15RuntimeShardRef(
+            Sp16kRuntimeShardRef(
                 inventory_index=inventory_index,
                 bin_path=bin_path,
                 sidecar_path=sidecar_path,
@@ -203,11 +301,11 @@ def load_runtime_manifest_view(config: TinyLlamaP15PretokDatasetConfig) -> TinyL
         )
 
     total_samples = sum(shard.valid_offsets for shard in eligible)
-    return TinyLlamaP15RuntimeManifestView(
+    return Sp16kRuntimeManifestView(
         split=config.split,
         block_size=config.block_size,
         eligible_shards=eligible,
-        short_shard_stats=TinyLlamaP15ShortShardStats(
+        short_shard_stats=Sp16kShortShardStats(
             short_shards_skipped=short_shards,
             short_tokens_skipped=short_tokens,
         ),
@@ -217,22 +315,36 @@ def load_runtime_manifest_view(config: TinyLlamaP15PretokDatasetConfig) -> TinyL
 
 def build_epoch_sampler_plan(
     *,
-    manifest_view: TinyLlamaP15RuntimeManifestView,
+    manifest_view: Sp16kRuntimeManifestView,
     base_seed: int,
     epoch: int,
-) -> TinyLlamaP15EpochSamplerPlan:
+) -> Sp16kEpochSamplerPlan:
     valid_offsets_per_shard = [int(shard.valid_offsets) for shard in manifest_view.eligible_shards]
     order = epoch_shard_permutation(
         num_shards=len(valid_offsets_per_shard),
         base_seed=base_seed,
         epoch=epoch,
     )
-    return TinyLlamaP15EpochSamplerPlan(
+    return Sp16kEpochSamplerPlan(
         base_seed=base_seed,
         epoch=epoch,
         valid_offsets_per_shard=valid_offsets_per_shard,
         shard_order=order,
     )
+
+
+def _next_coprime_step(*, start: int, modulus: int) -> int:
+    _validate_positive_int("modulus", modulus)
+    _validate_positive_int("start", start)
+    if modulus == 1:
+        return 1
+
+    step = start
+    while math.gcd(step, modulus) != 1:
+        step += 1
+        if step >= modulus:
+            step = 1
+    return step
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
@@ -7,9 +8,10 @@ import numpy as np
 import pytest
 
 from llm_lab.core.data.pretok_dataset_contract import (
-    TinyLlamaP15PretokDatasetConfig,
+    Sp16kPretokDatasetConfig,
     build_epoch_sampler_plan,
     epoch_shard_permutation,
+    iter_affine_offsets_for_shard,
     last_valid_offset,
     load_runtime_manifest_view,
     offset_permutation,
@@ -108,7 +110,7 @@ def test_manifest_view_filters_split_skips_short_and_keeps_inventory_order(tmp_p
     )
 
     view = load_runtime_manifest_view(
-        TinyLlamaP15PretokDatasetConfig(root_dir=root, split="train", block_size=8)
+        Sp16kPretokDatasetConfig(root_dir=root, split="train", block_size=8)
     )
 
     assert [s.inventory_index for s in view.eligible_shards] == [0, 2]
@@ -140,7 +142,7 @@ def test_manifest_view_fails_on_uint16_size_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="byte size mismatch"):
         load_runtime_manifest_view(
-            TinyLlamaP15PretokDatasetConfig(root_dir=root, split="train", block_size=8)
+            Sp16kPretokDatasetConfig(root_dir=root, split="train", block_size=8)
         )
 
 
@@ -166,7 +168,7 @@ def test_manifest_view_fails_if_no_eligible_shards(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no eligible shards"):
         load_runtime_manifest_view(
-            TinyLlamaP15PretokDatasetConfig(root_dir=root, split="train", block_size=8)
+            Sp16kPretokDatasetConfig(root_dir=root, split="train", block_size=8)
         )
 
 
@@ -202,3 +204,49 @@ def test_offset_permutation_is_without_replacement() -> None:
     rng = np.random.Generator(np.random.PCG64(123))
     offsets = offset_permutation(valid_offsets=6, rng=rng)
     assert sorted(offsets) == [0, 1, 2, 3, 4, 5]
+
+
+def test_iter_affine_offsets_for_shard_is_seeded_and_without_replacement() -> None:
+    offsets_a = list(iter_affine_offsets_for_shard(valid_offsets=7, base_seed=11, epoch=3, shard_idx=2))
+    offsets_b = list(iter_affine_offsets_for_shard(valid_offsets=7, base_seed=11, epoch=3, shard_idx=2))
+    offsets_c = list(iter_affine_offsets_for_shard(valid_offsets=7, base_seed=11, epoch=4, shard_idx=2))
+
+    assert offsets_a == offsets_b
+    assert offsets_c != offsets_a
+    assert sorted(offsets_a) == list(range(7))
+
+
+def test_iter_ordered_refs_supports_partial_consumption_for_large_shards() -> None:
+    shard0 = type("_Shard", (), {"valid_offsets": 1_000_000_000})()
+    shard1 = type("_Shard", (), {"valid_offsets": 3})()
+    view = type("_View", (), {"eligible_shards": [shard0, shard1]})()
+    plan = build_epoch_sampler_plan(manifest_view=view, base_seed=5, epoch=2)
+
+    first_refs = list(itertools.islice(plan.iter_ordered_refs(), 8))
+
+    assert len(first_refs) == 8
+    first_shard_idx = first_refs[0][0]
+    assert all(shard_idx == first_shard_idx for shard_idx, _ in first_refs)
+    seen_offsets = [offset for _, offset in first_refs]
+    assert len(set(seen_offsets)) == len(seen_offsets)
+    assert all(0 <= offset < 1_000_000_000 for offset in seen_offsets)
+
+
+def test_iter_ordered_refs_slice_matches_full_plan_across_shard_boundaries() -> None:
+    shard0 = type("_Shard", (), {"valid_offsets": 2})()
+    shard1 = type("_Shard", (), {"valid_offsets": 3})()
+    shard2 = type("_Shard", (), {"valid_offsets": 4})()
+    view = type("_View", (), {"eligible_shards": [shard0, shard1, shard2]})()
+    plan = build_epoch_sampler_plan(manifest_view=view, base_seed=17, epoch=1)
+
+    full_refs = list(plan.iter_ordered_refs())
+
+    assert list(plan.iter_ordered_refs_slice(sample_start=0, sample_count=4)) == full_refs[:4]
+    assert list(plan.iter_ordered_refs_slice(sample_start=3, sample_count=4)) == full_refs[3:7]
+    assert list(plan.iter_ordered_refs_slice(sample_start=len(full_refs), sample_count=0)) == []
+
+    with pytest.raises(ValueError, match="exceeds total sample count"):
+        list(plan.iter_ordered_refs_slice(sample_start=len(full_refs) + 1, sample_count=0))
+
+    with pytest.raises(ValueError, match="requested slice exceeds total sample count"):
+        list(plan.iter_ordered_refs_slice(sample_start=len(full_refs) - 1, sample_count=2))

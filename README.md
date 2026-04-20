@@ -1,8 +1,8 @@
 # foundry-llm
 
-`foundry-llm` began as a compact educational decoder-only transformer lab and has gradually grown into a more realistic experimentation stack. The repository still optimizes for readability and iteration speed, but `main` now includes stronger architecture choices, package contracts, tokenizer identity rules, cache-aware inference plumbing, richer trainer controls, and a full shard-based pretraining pipeline.
+`foundry-llm` began as a compact educational decoder-only transformer lab and has gradually grown into a more realistic experimentation and inference stack. The repository still optimizes for readability and iteration speed, but `main` now includes a LLaMA-family architecture (GQA, SwiGLU, RMSNorm, RoPE), package contracts, tokenizer identity rules, a full shard-based pretraining pipeline, a KV-cache inference engine, and a measurement-driven serving + eval layer.
 
-The center of gravity is still a compact `MiniGPT` implementation and a script-first workflow. What changed is the engineering surface around it: tokenizer behavior is treated as a contract, package reload paths are explicit, architecture variants are first-class, and the data path now carries reproducibility and provenance requirements. It is still not a production platform, but it is no longer just a toy MiniGPT repo.
+The center of gravity is still a compact `MiniGPT` implementation and a script-first workflow. What changed is the engineering surface: tokenizer behavior is treated as a contract, architecture variants are first-class, the data path carries reproducibility requirements, and the model can now be loaded and served over HTTP with SSE streaming, latency instrumentation, quantization, and safety guardrails. The repo produced **NanoLlama 8L** (127.6M params, 2.5B tokens, val loss 3.36) and serves it with 7.5x cached decode speedup and 70% memory reduction under int8 quantization.
 
 ---
 
@@ -34,11 +34,32 @@ The center of gravity is still a compact `MiniGPT` implementation and a script-f
 - Tokenizer artifacts are backend-aware and carry behavior-based identity through hashing.
 - FineWeb-Edu pipeline: `data/prepare_dataset.py` streams from HuggingFace, tokenizes with GPT-2 BPE (tiktoken), and writes `uint16 .npy` shards for `ShardLoader`/`ShardTrainer`.
 
+### Serving and inference
+
+- `Engine` splits inference into `prefill()` (one model call, seeds KV cache) and `decode_step()` (one token per call, extends cache). Sliding window policy bounds cache growth.
+- FastAPI endpoints: `POST /generate` (sync), `POST /stream` (SSE token streaming with stop-string holdback), `GET /health`, `GET /metrics`.
+- Full sampling pipeline: temperature, top-k, top-p (nucleus), repetition penalty, frequency penalty — with greedy short-circuit at temperature=0.
+- Stop taxonomy: EOS token, custom stop token IDs, stop strings (text-level), max_new_tokens. Markers excluded from visible output.
+- Prefill batching: right-pad + attention mask for variable-length prompts in a single forward pass; decode remains B=1.
+- Precision: fp16/bf16/fp32 with device-aware fallback. int8 dynamic quantization via `torch.quantization.quantize_dynamic` (qnnpack).
+- Safety: PII detection (email/phone/SSN regex), profanity filter, refusal template. Pre-filter on prompt, post-filter on generated text.
+- Privacy-preserving structured logs: prompt SHA-256 hash, no raw text by default. Per-request metrics (TTFT, prefill_ms, decode_ms/token, tokens/sec).
+- Rate limiting: fixed-window per-client with 429 + Retry-After.
+- Tiktoken support: `TiktokenWrapper` adapts tiktoken GPT-2 for NanoLlama (filters out-of-vocab IDs 50257-50303, resolves EOS=50256).
+
+### Evaluation
+
+- Streaming perplexity: sliding-window NLL with configurable stride and max sequence length.
+- Prompt suite: 6 bucketed test cases (short/long prompt, repetition trap, stop trap, code-like, safety probe) with engine and HTTP backends.
+- Quantization sweep: fp32/fp16/bf16/int8 precision matrix with PPL drift, latency, and memory measurements.
+- Evidence pack builder: cache equivalence report, TTFT/TPS curves across context lengths and batch sizes, KV-cache memory economics (MHA vs GQA formula + measurements).
+
 ### Testing and validation
 
-- `tests/core` covers forward contracts, decoding, RoPE, GQA, norms, MLP variants, trainer semantics, tokenizer IO, and package IO.
-- Deterministic contract tests for tokenizer identity, shard provenance, and boundary-safe sample generation.
-- New: `test_shard_trainer.py`, `test_shard_loader.py`, `test_lr_schedule.py`, `test_trainer_shard_compat.py`.
+- `tests/core/` covers forward contracts, decoding, RoPE, GQA, norms, MLP variants, trainer semantics, tokenizer IO, and package IO.
+- `tests/serving/` covers KV-cache ABI, cache equivalence, engine structure, stop/EOS, sampling, API endpoints, SSE streaming, metrics, batching, rate limiting, safety, precision, quantization, and tiktoken wrapper.
+- `tests/eval/` covers prompt suite data contracts, report building, evidence pack, quantization audit, and research lane guards.
+- 152 tests total, all passing.
 
 ---
 
@@ -85,7 +106,7 @@ reference — closing 4× the token gap with a better architecture.
 
 **HellaSwag (10,042 items, normalized accuracy): 0.2696** — above random (0.25)
 and above the GPT-2 baseline (~0.238 at 1.05B tokens).
-See `scripts/eval_hellaswag.py` (`data/hellaswag_val.jsonl` included).
+See `scripts/eval/eval_hellaswag.py` (`data/hellaswag_val.jsonl` included).
 
 ### Val loss trajectory
 
@@ -125,18 +146,16 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 
 ## Evolution / decision log
 
-- **2025-12-05 to 2025-12-11** — establish the teaching baseline with char tokenization, char datasets, attention, transformer blocks, `MiniGPT`, trainer, and sampling.
-- **2025-12-13 to 2025-12-30** — expand the lab into a usable experimentation repo with subword tokenization, package IO, config loading, training and sampling scripts, positional encoding variants, and broader test coverage.
-- **2026-01-01** — add benchmarking scripts and optimize attention hot paths.
-- **2026-01-07 to 2026-01-09** — move toward a more realistic decoder architecture with GQA, fixed reserved-token ABI, GPT-style pretokenization, RoPE scaling, and `nanollama`-family invariants.
-- **2026-02-22** — add AdamW decay groups and cleaner optimizer handling in the trainer.
-- **Early March 2026** — add KV-cache-aware inference contracts, decode-aware masking, and canonical cache layout through the model stack.
-- **Mid March 2026** — add stronger trainer runtime controls: accumulation, scheduling, bf16 support, checkpoint handling, and progress/status telemetry.
-- **Late March 2026** — add SentencePiece-backed tokenizer artifacts, behavior-based tokenizer hashing, and the deterministic pretokenized shard pipeline.
-- **March 2026 (calibration)** — reproduce GPT-2 124M on FineWeb-Edu as a reference baseline: val loss 3.6273 at 1.05 B tokens.
-- **March 2026 (ablation)** — 8-run architecture ablation isolating the contribution of RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, and logit softcap. RoPE (−0.386) and SwiGLU (−0.139) dominate.
-- **March 2026 (pretraining)** — full NanoLlama 8L pretraining run: 4 768 steps, 2.5 B tokens, RTX 4090, ~9 h. Final val loss 3.3566 (BPB 1.016). HellaSwag: 0.2696.
-
+- **Dec 2025 (foundation)** — char tokenization, attention, transformer blocks, `MiniGPT`, trainer, sampling. The goal was a self-contained teaching codebase where every line is legible.
+- **Late Dec 2025 (experimentation surface)** — subword tokenization, package IO, config-driven training, positional encoding variants (learned, sinusoidal, RoPE). The repo becomes usable for real experiments, not just walkthroughs.
+- **Jan 2026 (architecture)** — GQA, fixed reserved-token ABI, RoPE scaling, `nanollama`-family config invariants. Decision: invest in LLaMA-family architecture early so the model stack doesn't need rewiring before pretraining.
+- **Feb 2026** — AdamW decay groups. Attention hot-path optimization (1.44x microbench, causal mask caching).
+- **Early Mar 2026 (inference contracts)** — KV-cache ABI through the forward path (`past_key_values`, `use_cache`, `attention_mask` for right-padding). This was prerequisite work for serving — the model needed to return cache in a canonical shape before an engine could consume it.
+- **Mid Mar 2026 (training stack)** — gradient accumulation, cosine scheduling with warmup, bf16 autocast, checkpoint handling, progress telemetry. SentencePiece tokenizer backend with behavior-based hashing. Deterministic pretokenized shard pipeline for `ShardTrainer`.
+- **Mar 2026 (calibration)** — GPT-2 124M reproduction on FineWeb-Edu as reference baseline (val 3.6273 at 1.05B tokens). Without a calibrated baseline, all subsequent numbers are unanchored.
+- **Mar 2026 (ablation)** — 8-run swap ablation isolating RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, logit softcap. RoPE (−0.386 val loss) and SwiGLU (−0.139) dominate. This confirmed the architecture choices before committing to a full run.
+- **Mar 2026 (pretraining)** — NanoLlama 8L: 4768 steps, 2.5B tokens, RTX 4090, ~9h. Val 3.3566 (BPB 1.016), HellaSwag 0.2696. Only 0.020 BPB behind the 10B-token GPT-2 reference.
+- **Mar–Apr 2026 (serving)** — the question shifts from "can we train it" to "can we serve it with measured latency." KV-cache engine with prefill/decode separation; correctness proven before optimization (cache equivalence gate: max |logit_diff| 6.68e-06). Measured 7.5x decode speedup on NanoLlama. FastAPI with SSE streaming, batched prefill, rate limiting, PII/profanity safety filters. int8 dynamic quantization: 70% memory reduction at +6% PPL drift and 1.27x faster decode — the insight being that int8 helps large models (memory-bandwidth-bound) but hurts small ones (compute-overhead-bound). Tiktoken adapter for NanoLlama with out-of-vocab filtering. Prompt suite, perplexity regression, evidence pack with TTFT/TPS curves across context lengths and batch sizes. 152 tests.
 ---
 
 ## Repository layout
@@ -160,7 +179,9 @@ foundry-llm/
 ├── docs/
 │   ├── ablation_analysis.md       ← swap ablation results + confound analysis
 │   ├── eval_results.md            ← full eval suite output + implementation notes
-│   └── replication.md             ← step-by-step reproduction guide
+│   ├── local_artifacts.md         ← all local checkpoint / log / CSV paths ← START HERE
+│   ├── replication.md             ← step-by-step reproduction guide
+│   └── serving_nanollama_tiktoken.md ← tiktoken ↔ serving layer integration guide
 ├── results/
 │   ├── nanollama_8l_training.csv  ← full 4 768-step training trajectory
 │   └── ablation_summary.csv       ← 8-swap ablation table (swap confound flagged)
@@ -170,14 +191,20 @@ foundry-llm/
 │   ├── runpod_container_entrypoint.sh ← container entrypoint (SSH + conda env)
 │   └── ...                        ← additional cloud ops helpers
 ├── Dockerfile                     ← vastai/pytorch base, CUDA 13.2, Python 3.11
-├── llm_lab/core/
-│   ├── model/                     ← MiniGPT, attention (MHA/GQA/SDPA), blocks, norms
-│   ├── train/                     ← Trainer, ShardTrainer, lr_schedule, AdamW groups
-│   ├── data/                      ← ShardLoader, CharDataset, LanguageModelingDataset
-│   ├── decode/                    ← greedy, temperature, top-k, top-p sampling
-│   ├── tokenization/              ← CharTokenizer, SubwordTokenizer (BPE + SentencePiece)
-│   └── package/                   ← model packaging I/O
-└── tests/core/                    ← unit + smoke tests
+├── llm_lab/
+│   ├── core/
+│   │   ├── model/                 ← MiniGPT, attention (MHA/GQA/SDPA), blocks, norms
+│   │   ├── train/                 ← Trainer, ShardTrainer, lr_schedule, AdamW groups
+│   │   ├── data/                  ← ShardLoader, CharDataset, LanguageModelingDataset
+│   │   ├── decode/                ← greedy, temperature, top-k, top-p sampling
+│   │   ├── tokenization/          ← CharTokenizer, SubwordTokenizer, TiktokenWrapper
+│   │   └── package/               ← model packaging I/O + NanoLlama loader
+│   ├── serving/                   ← inference engine, FastAPI, streaming, safety, quant
+│   └── eval/                      ← perplexity, prompt suite, report builder
+├── tests/
+│   ├── core/                      ← model, training, tokenization tests
+│   ├── serving/                   ← engine, API, cache, precision, safety tests
+│   └── eval/                      ← prompt suite, report, evidence pack tests
 ```
 
 ---
@@ -221,10 +248,10 @@ See `docs/replication.md` for cloud GPU setup notes (persistent volumes, OOM pre
 
 ```bash
 # Full 11-test eval suite (generation, perplexity, entropy, HellaSwag proxy)
-python scripts/eval_suite.py --ckpt out/ckpts/step_04768_model_only.pt
+python scripts/eval/eval_suite.py --ckpt out/ckpts/step_04768_model_only.pt
 
 # Real HellaSwag benchmark — 10 042 items, ~10 min on CPU (~0.2696 expected)
-python scripts/eval_hellaswag.py --ckpt out/ckpts/step_04768_model_only.pt
+python scripts/eval/eval_hellaswag.py --ckpt out/ckpts/step_04768_model_only.pt
 
 # Interactive sampling REPL
 python -i scripts/interact.py --ckpt out/ckpts/step_04768_model_only.pt
@@ -302,9 +329,40 @@ cfg, tok, model = load_model_package("artifacts/my_run")
 
 ---
 
+## Serving API
+
+```bash
+# Start the server (NanoLlama checkpoint + tiktoken)
+python scripts/serving/serve.py \
+  --package experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt \
+  --loader nanollama --device cpu --dtype fp32
+
+# Sync generate
+curl -X POST http://127.0.0.1:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "The meaning of life is", "max_new_tokens": 64, "temperature": 0.8, "top_k": 40}'
+
+# SSE streaming
+curl -N -X POST http://127.0.0.1:8000/stream \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Once upon a time", "max_new_tokens": 128, "temperature": 0.7}'
+
+# Health + metrics
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/metrics
+```
+
+For sp16k package models, omit `--loader` (defaults to `package`).
+
+---
+
 ## Known limits
 
 - The repo is script-first rather than a unified CLI or application.
-- bf16 training is CUDA-only; MPS/CPU run fp32.
+- bf16 training is CUDA-only; MPS/CPU run fp32. fp16/bf16 serving falls back to fp32 on CPU.
 - Greedy decoding produces repetition loops — expected for pretrain-only models. Use nucleus sampling.
-- This is an experimentation lab, not a production training or serving system.
+- Decode is B=1 only; batched prefill works but each request decodes sequentially.
+- No continuous/dynamic batching, speculative decoding, or prefix caching.
+- int8 prefill is ~3x slower than fp32 on CPU (dynamic quantization overhead); int8 decode is 1.27x faster.
+- Safety filters are heuristic (regex PII, narrow profanity list) — suitable for demonstration, not production.
+- NanoLlama has no chat template — use plain text prompting.

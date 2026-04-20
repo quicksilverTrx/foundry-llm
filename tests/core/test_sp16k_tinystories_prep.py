@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from llm_lab.core.data.pretok_shards import build_tinyllama_p15_pretokenized_shards
-from llm_lab.core.data.tinyllama_p15_tinystories_prep import (
+from llm_lab.core.data.pretok_shards import build_sp16k_pretokenized_shards
+from llm_lab.core.data.sp16k_tinystories_prep import (
     build_fixed_split_manifest,
-    preflight_p15_train_config,
+    preflight_sp16k_train_config,
     write_fixed_split_manifest,
 )
-from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import build_tokenizer_artifact_from_docs, load_tokenizer_from_artifact_dir
+from llm_lab.core.tokenization.sp16k_tokenizer_artifact import build_tokenizer_artifact_from_docs, load_tokenizer_from_artifact_dir
 
 
 def _docs_train() -> list[str]:
@@ -102,14 +102,14 @@ def test_pretok_train_val_separate_roots_and_preflight_pass(tmp_path: Path) -> N
 
     shards_train = tmp_path / "artifacts" / "shards_train"
     shards_val = tmp_path / "artifacts" / "shards_val"
-    build_tinyllama_p15_pretokenized_shards(
+    build_sp16k_pretokenized_shards(
         input_file=train_file,
         tokenizer_artifact_dir=tokenizer_dir,
         split_manifest_path=train_manifest,
         output_dir=shards_train,
         max_tokens_per_shard=1024,
     )
-    build_tinyllama_p15_pretokenized_shards(
+    build_sp16k_pretokenized_shards(
         input_file=val_file,
         tokenizer_artifact_dir=tokenizer_dir,
         split_manifest_path=val_manifest,
@@ -151,7 +151,7 @@ def test_pretok_train_val_separate_roots_and_preflight_pass(tmp_path: Path) -> N
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True), encoding="utf-8")
 
-    report = preflight_p15_train_config(cfg_path)
+    report = preflight_sp16k_train_config(cfg_path)
     assert report["tokenizer"]["tokenizer_hash"] == tokenizer_hash
     assert report["eligible_shards"]["train"] >= 1
     assert report["eligible_shards"]["val"] >= 1
@@ -181,14 +181,14 @@ def test_preflight_fails_on_vocab_hash_and_no_eligible_shards(tmp_path: Path) ->
 
     shards_train = tmp_path / "artifacts" / "shards_train"
     shards_val = tmp_path / "artifacts" / "shards_val"
-    build_tinyllama_p15_pretokenized_shards(
+    build_sp16k_pretokenized_shards(
         input_file=train_file,
         tokenizer_artifact_dir=tokenizer_dir,
         split_manifest_path=train_manifest,
         output_dir=shards_train,
         max_tokens_per_shard=1024,
     )
-    build_tinyllama_p15_pretokenized_shards(
+    build_sp16k_pretokenized_shards(
         input_file=val_file,
         tokenizer_artifact_dir=tokenizer_dir,
         split_manifest_path=val_manifest,
@@ -234,7 +234,7 @@ def test_preflight_fails_on_vocab_hash_and_no_eligible_shards(tmp_path: Path) ->
     bad_vocab_path = tmp_path / "bad_vocab.json"
     bad_vocab_path.write_text(json.dumps(bad_vocab, indent=2, sort_keys=True), encoding="utf-8")
     with pytest.raises(ValueError, match="vocab size"):
-        preflight_p15_train_config(bad_vocab_path)
+        preflight_sp16k_train_config(bad_vocab_path)
 
     bad_hash = dict(base_cfg)
     bad_hash["tokenizer"] = dict(base_cfg["tokenizer"])
@@ -242,7 +242,7 @@ def test_preflight_fails_on_vocab_hash_and_no_eligible_shards(tmp_path: Path) ->
     bad_hash_path = tmp_path / "bad_hash.json"
     bad_hash_path.write_text(json.dumps(bad_hash, indent=2, sort_keys=True), encoding="utf-8")
     with pytest.raises(ValueError, match="hash mismatch"):
-        preflight_p15_train_config(bad_hash_path)
+        preflight_sp16k_train_config(bad_hash_path)
 
     no_eligible = dict(base_cfg)
     no_eligible["model"] = dict(base_cfg["model"])
@@ -250,4 +250,4 @@ def test_preflight_fails_on_vocab_hash_and_no_eligible_shards(tmp_path: Path) ->
     no_eligible_path = tmp_path / "no_eligible.json"
     no_eligible_path.write_text(json.dumps(no_eligible, indent=2, sort_keys=True), encoding="utf-8")
     with pytest.raises(ValueError, match="no eligible shards"):
-        preflight_p15_train_config(no_eligible_path)
+        preflight_sp16k_train_config(no_eligible_path)

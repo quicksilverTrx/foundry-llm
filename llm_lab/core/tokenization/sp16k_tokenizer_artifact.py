@@ -13,7 +13,7 @@ from llm_lab.core.tokenization.subword_tokenizer import (
     get_pretokenizer_spec,
 )
 
-# TinyLlama bridge START: tinyllama_p15 tokenizer artifact pipeline
+# SP16K bridge START: sp16k tokenizer artifact pipeline
 TOKENIZER_CONTRACT_VERSION_V1 = "tinyllama_p15_tokenizer_artifact_v1"
 TOKENIZER_CONTRACT_VERSION_V2 = "tinyllama_p15_tokenizer_artifact_v2"
 TOKENIZER_CONTRACT_VERSION = TOKENIZER_CONTRACT_VERSION_V2
@@ -427,4 +427,4 @@ def build_tokenizer_artifact_from_train_file(
     return output_paths
 
 
-# TinyLlama bridge END: tinyllama_p15 tokenizer artifact pipeline
+# SP16K bridge END: sp16k tokenizer artifact pipeline

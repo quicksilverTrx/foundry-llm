@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from llm_lab.core.data.pretok_dataset import TinyLlamaP15PretokIterableDataset
-from llm_lab.core.data.pretok_dataset_contract import build_epoch_sampler_plan
+from llm_lab.core.data.pretok_dataset import Sp16kPretokIterableDataset
+from llm_lab.core.data.pretok_dataset_contract import Sp16kEpochSamplerPlan, build_epoch_sampler_plan
 from llm_lab.core.data.pretok_shards import PRETOK_FORMAT_VERSION, ROOT_MANIFEST_FILENAME, write_uint16_tokens
 from llm_lab.core.model.gpt import MiniGPT, MiniGPTConfig
 from llm_lab.core.train.trainer import Trainer, TrainerConfig
@@ -102,7 +103,7 @@ def test_shapes_shift_boundaries_and_exact_len(tmp_path: Path) -> None:
     root = tmp_path / "shards"
     _build_boundary_tree(root)
     block_size = 4
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=block_size, base_seed=7)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=block_size, base_seed=7)
 
     # Short shard accounting and exact pass cardinality.
     assert ds.short_shards_skipped == 1
@@ -137,13 +138,13 @@ def test_all_short_shards_fail_construction(tmp_path: Path) -> None:
     _write_root_manifest(root, inventory)
 
     with pytest.raises(ValueError, match="no eligible shards"):
-        TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+        Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
 
 
 def test_epoch_semantics_default_set_zero_repeatability_and_reorder(tmp_path: Path) -> None:
     root = tmp_path / "epoch_tree"
     _build_three_shard_tree(root)
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
 
     refs_default = ds.sample_refs_for_current_epoch()
     ds.set_epoch(0)
@@ -160,7 +161,7 @@ def test_epoch_semantics_default_set_zero_repeatability_and_reorder(tmp_path: Pa
 def test_multi_shard_plan_matches_frozen_epoch_and_offset_permutations(tmp_path: Path) -> None:
     root = tmp_path / "plan_match"
     _build_three_shard_tree(root)
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
     ds.set_epoch(1)
 
     plan = build_epoch_sampler_plan(
@@ -176,6 +177,24 @@ def test_multi_shard_plan_matches_frozen_epoch_and_offset_permutations(tmp_path:
     assert ds.sample_refs_for_current_epoch() == expected
 
 
+def test_dataset_iteration_uses_streaming_plan_not_iter_ordered_pairs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "streaming_path"
+    _build_three_shard_tree(root)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+
+    def _boom(self) -> list[tuple[int, list[int]]]:
+        raise AssertionError("iter_ordered_pairs should not be used by the production dataset path")
+
+    monkeypatch.setattr(Sp16kEpochSamplerPlan, "iter_ordered_pairs", _boom)
+
+    refs = ds.sample_refs_for_current_epoch()
+
+    assert len(refs) == len(ds)
+
+
 def test_manifest_inventory_is_authoritative_not_filesystem_glob(tmp_path: Path) -> None:
     root = tmp_path / "manifest_authority"
     _build_boundary_tree(root)
@@ -186,7 +205,7 @@ def test_manifest_inventory_is_authoritative_not_filesystem_glob(tmp_path: Path)
     write_uint16_tokens(extra_bin, [100, 101, 102, 103, 104, 105, 106, 107, 108])
     _write_sidecar(extra_sidecar, split="train", shard_index=999999, token_count=9)
 
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
     assert len(ds) == 4  # unchanged from inventory-only eligible shards
     assert {shard_idx for shard_idx, _ in ds.sample_refs_for_current_epoch()} == {0, 1}
 
@@ -194,17 +213,67 @@ def test_manifest_inventory_is_authoritative_not_filesystem_glob(tmp_path: Path)
 def test_iter_fails_fast_when_used_with_worker_processes(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "worker_guard"
     _build_boundary_tree(root)
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
 
     monkeypatch.setattr("llm_lab.core.data.pretok_dataset.get_worker_info", lambda: object())
     with pytest.raises(RuntimeError, match="single-worker mode only"):
         next(iter(ds))
 
 
+def test_constructor_does_not_eagerly_memmap_all_shards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "lazy_init"
+    _build_three_shard_tree(root)
+    memmap_calls: list[Path] = []
+    real_memmap = np.memmap
+
+    def _tracking_memmap(filename, *args, **kwargs):  # type: ignore[no-untyped-def]
+        memmap_calls.append(Path(filename))
+        return real_memmap(filename, *args, **kwargs)
+
+    monkeypatch.setattr("llm_lab.core.data.pretok_dataset.np.memmap", _tracking_memmap)
+
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+    assert memmap_calls == []
+
+    refs = ds.sample_refs_for_current_epoch()
+    first_shard_idx = refs[0][0]
+    first_shard_path = ds._manifest_view.eligible_shards[first_shard_idx].bin_path
+
+    iterator = iter(ds)
+    next(iterator)
+
+    assert memmap_calls == [first_shard_path]
+
+
+def test_memmap_opens_lazily_on_shard_transition_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "lazy_iter"
+    _build_three_shard_tree(root)
+    memmap_calls: list[Path] = []
+    real_memmap = np.memmap
+
+    def _tracking_memmap(filename, *args, **kwargs):  # type: ignore[no-untyped-def]
+        memmap_calls.append(Path(filename))
+        return real_memmap(filename, *args, **kwargs)
+
+    monkeypatch.setattr("llm_lab.core.data.pretok_dataset.np.memmap", _tracking_memmap)
+
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+    refs = ds.sample_refs_for_current_epoch()
+    touched_shards: list[int] = []
+    for shard_idx, _ in refs:
+        if not touched_shards or touched_shards[-1] != shard_idx:
+            touched_shards.append(shard_idx)
+    expected_paths = [ds._manifest_view.eligible_shards[idx].bin_path for idx in touched_shards]
+
+    produced = list(iter(ds))
+    assert len(produced) == len(refs)
+    assert memmap_calls == expected_paths
+
+
 def test_dataloader_one_batch_smoke_and_forward_loss(tmp_path: Path) -> None:
     root = tmp_path / "smoke"
     _build_boundary_tree(root)
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=7)
     loader = DataLoader(ds, batch_size=2, shuffle=False, num_workers=0)
 
     xb, yb = next(iter(loader))
@@ -232,7 +301,7 @@ def test_dataloader_one_batch_smoke_and_forward_loss(tmp_path: Path) -> None:
 def test_short_trainer_smoke_without_api_changes(tmp_path: Path) -> None:
     root = tmp_path / "trainer_smoke"
     _build_three_shard_tree(root)
-    ds = TinyLlamaP15PretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
+    ds = Sp16kPretokIterableDataset(root_dir=root, split="train", block_size=4, base_seed=0)
     loader = DataLoader(ds, batch_size=2, shuffle=False, num_workers=0)
 
     cfg = MiniGPTConfig(

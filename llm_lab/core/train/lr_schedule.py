@@ -5,9 +5,9 @@ Learning-rate schedule functions for pretraining.
 Currently provides:
   cosine_with_warmup — linear warmup followed by cosine decay.
 
-This is the canonical implementation used by Phase 5 swaps and Phase 6
-NanoLlama pretraining.  Previously it was duplicated inline in run_swap.py
-and run_phase6.py; it is now a single importable function.
+Canonical implementation used across ablation runs and NanoLlama pretraining.
+Previously duplicated inline in experiment scripts; extracted here as a
+single importable function.
 """
 from __future__ import annotations
 
@@ -32,10 +32,10 @@ def cosine_with_warmup(
 
     Args:
         step:         Current optimiser step (0-indexed).
-        warmup_steps: Number of warm-up steps (200 for Phase 6).
-        max_steps:    Total training steps (4768 for Phase 6).
-        max_lr:       Peak learning rate (6e-4 for Phase 6).
-        min_lr:       Floor learning rate (6e-5 = 0.1 × max_lr for Phase 6).
+        warmup_steps: Number of warm-up steps.
+        max_steps:    Total training steps.
+        max_lr:       Peak learning rate.
+        min_lr:       Floor learning rate.
 
     Returns:
         Learning rate (float) for the current step.

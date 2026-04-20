@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Sequence
 
 from llm_lab.core.tokenization.subword_tokenizer import SubwordTokenizer
-from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import (
+from llm_lab.core.tokenization.sp16k_tokenizer_artifact import (
     load_docs_one_per_non_empty_line,
     load_tokenizer_from_artifact_dir as load_tokenizer_from_artifact_dir_v2,
 )
 
-# TinyLlama bridge START: tinyllama_p15 pretokenized shard pipeline
+# SP16K bridge START: sp16k pretokenized shard pipeline
 PRETOK_FORMAT_VERSION = "tinyllama_p15_pretok_uint16_v1"
 SUPPORTED_DTYPE = "uint16"
 MAX_UINT16 = 65535
@@ -35,20 +35,20 @@ REQUIRED_SPLIT_MANIFEST_KEYS = {
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15ShardBuildConfig:
+class Sp16kShardBuildConfig:
     max_tokens_per_shard: int
     format_version: str = PRETOK_FORMAT_VERSION
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15DocSpan:
+class Sp16kDocSpan:
     global_doc_index: int
     start_token: int
     end_token: int
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15ShardChunk:
+class Sp16kShardChunk:
     split: Literal["train", "val"]
     shard_index: int
     token_ids: list[int]
@@ -58,7 +58,7 @@ class TinyLlamaP15ShardChunk:
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15ShardSidecar:
+class Sp16kShardSidecar:
     format_version: str
     filename: str
     split: Literal["train", "val"]
@@ -75,7 +75,7 @@ class TinyLlamaP15ShardSidecar:
 
 
 @dataclass(frozen=True)
-class TinyLlamaP15RootManifest:
+class Sp16kRootManifest:
     format_version: str
     tokenizer_provenance: dict[str, Any]
     split_provenance: dict[str, Any]
@@ -189,15 +189,15 @@ def chunk_split_token_stream(
     *,
     split: Literal["train", "val"],
     token_stream: Sequence[int],
-    doc_spans: Sequence[TinyLlamaP15DocSpan],
+    doc_spans: Sequence[Sp16kDocSpan],
     max_tokens_per_shard: int,
-) -> list[TinyLlamaP15ShardChunk]:
+) -> list[Sp16kShardChunk]:
     if max_tokens_per_shard <= 0:
         raise ValueError("max_tokens_per_shard must be > 0")
     if not token_stream:
         return []
 
-    chunks: list[TinyLlamaP15ShardChunk] = []
+    chunks: list[Sp16kShardChunk] = []
     token_cursor = 0
     shard_index = 0
 
@@ -214,7 +214,7 @@ def chunk_split_token_stream(
             raise ValueError("doc spans do not cover chunk token range; invalid span metadata")
 
         chunks.append(
-            TinyLlamaP15ShardChunk(
+            Sp16kShardChunk(
                 split=split,
                 shard_index=shard_index,
                 token_ids=shard_tokens,
@@ -253,11 +253,11 @@ def read_uint16_tokens(path: Path) -> list[int]:
     return arr.tolist()
 
 
-def write_shard_sidecar(path: Path, sidecar: TinyLlamaP15ShardSidecar) -> None:
+def write_shard_sidecar(path: Path, sidecar: Sp16kShardSidecar) -> None:
     write_json(path, asdict(sidecar))
 
 
-def write_root_manifest(path: Path, root_manifest: TinyLlamaP15RootManifest) -> None:
+def write_root_manifest(path: Path, root_manifest: Sp16kRootManifest) -> None:
     write_json(path, asdict(root_manifest))
 
 
@@ -331,7 +331,7 @@ def _resolve_split_membership_semantics(
 
     if len(seen) != normalized_doc_count:
         raise ValueError(
-            "split membership must cover all normalized docs exactly once for tinyllama_p15"
+            "split membership must cover all normalized docs exactly once for sp16k"
         )
 
     return {"train": train, "val": val}
@@ -341,9 +341,9 @@ def _apply_eot_insertion_policy(
     encoded_docs: Sequence[tuple[int, list[int]]],
     *,
     eot_id: int,
-) -> tuple[list[int], list[TinyLlamaP15DocSpan]]:
+) -> tuple[list[int], list[Sp16kDocSpan]]:
     stream: list[int] = []
-    spans: list[TinyLlamaP15DocSpan] = []
+    spans: list[Sp16kDocSpan] = []
 
     # v1 policy: append EOT after every doc, including the final doc.
     for global_doc_index, encoded_ids in encoded_docs:
@@ -352,7 +352,7 @@ def _apply_eot_insertion_policy(
         stream.append(eot_id)
         end = len(stream)
         spans.append(
-            TinyLlamaP15DocSpan(
+            Sp16kDocSpan(
                 global_doc_index=global_doc_index,
                 start_token=start,
                 end_token=end,
@@ -366,7 +366,7 @@ def _summarize_split_counts(
     *,
     split_docs: Sequence[str],
     split_token_stream: Sequence[int],
-    doc_spans: Sequence[TinyLlamaP15DocSpan],
+    doc_spans: Sequence[Sp16kDocSpan],
 ) -> tuple[int, int]:
     # v1 semantics:
     # - document_count is the number of split docs post-normalization.
@@ -401,7 +401,7 @@ def _summarize_split_counts(
     return doc_count, token_count
 
 
-def build_tinyllama_p15_pretokenized_shards(
+def build_sp16k_pretokenized_shards(
     *,
     input_file: Path,
     tokenizer_artifact_dir: Path,
@@ -480,7 +480,7 @@ def build_tinyllama_p15_pretokenized_shards(
             write_uint16_tokens(shard_path, chunk.token_ids)
             shard_sha = sha256_hex_file(shard_path)
 
-            sidecar = TinyLlamaP15ShardSidecar(
+            sidecar = Sp16kShardSidecar(
                 format_version=PRETOK_FORMAT_VERSION,
                 filename=shard_filename,
                 split=split_literal,
@@ -505,7 +505,7 @@ def build_tinyllama_p15_pretokenized_shards(
                 }
             )
 
-    root_manifest = TinyLlamaP15RootManifest(
+    root_manifest = Sp16kRootManifest(
         format_version=PRETOK_FORMAT_VERSION,
         tokenizer_provenance={
             "tokenizer_artifact_dir": str(tokenizer_artifact_dir),
@@ -531,4 +531,4 @@ def build_tinyllama_p15_pretokenized_shards(
     return root_manifest_path
 
 
-# TinyLlama bridge END: tinyllama_p15 pretokenized shard pipeline
+# SP16K bridge END: sp16k pretokenized shard pipeline

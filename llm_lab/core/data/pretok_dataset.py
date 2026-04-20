@@ -8,8 +8,8 @@ import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
 from llm_lab.core.data.pretok_dataset_contract import (
-    TinyLlamaP15PretokDatasetConfig,
-    TinyLlamaP15RuntimeManifestView,
+    Sp16kPretokDatasetConfig,
+    Sp16kRuntimeManifestView,
     build_epoch_sampler_plan,
     load_runtime_manifest_view,
 )
@@ -17,9 +17,9 @@ from llm_lab.core.data.pretok_dataset_contract import (
 RuntimeSplit = Literal["train", "val"]
 
 
-class TinyLlamaP15PretokIterableDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor]]):
+class Sp16kPretokIterableDataset(IterableDataset[tuple[torch.Tensor, torch.Tensor]]):
     """
-    Finite iterable dataset over tinyllama_p15 pretokenized shards.
+    Finite iterable dataset over sp16k pretokenized shards.
 
     One iterator pass emits each valid offset exactly once for the current epoch.
     """
@@ -33,24 +33,14 @@ class TinyLlamaP15PretokIterableDataset(IterableDataset[tuple[torch.Tensor, torc
         base_seed: int = 0,
     ) -> None:
         super().__init__()
-        self.config = TinyLlamaP15PretokDatasetConfig(
+        self.config = Sp16kPretokDatasetConfig(
             root_dir=Path(root_dir),
             split=split,
             block_size=block_size,
             base_seed=base_seed,
         )
-        self._manifest_view: TinyLlamaP15RuntimeManifestView = load_runtime_manifest_view(self.config)
+        self._manifest_view: Sp16kRuntimeManifestView = load_runtime_manifest_view(self.config)
         self._epoch = 0
-
-        self._memmaps: list[np.memmap] = []
-        for shard in self._manifest_view.eligible_shards:
-            mem = np.memmap(shard.bin_path, dtype=np.uint16, mode="r")
-            if int(mem.shape[0]) != shard.token_count:
-                raise ValueError(
-                    f"token count mismatch for {shard.bin_path}: "
-                    f"sidecar={shard.token_count} memmap={int(mem.shape[0])}"
-                )
-            self._memmaps.append(mem)
 
         self.eligible_shard_count = len(self._manifest_view.eligible_shards)
         self.short_shards_skipped = self._manifest_view.short_shard_stats.short_shards_skipped
@@ -85,23 +75,36 @@ class TinyLlamaP15PretokIterableDataset(IterableDataset[tuple[torch.Tensor, torc
             base_seed=self.config.base_seed,
             epoch=self._epoch,
         )
-        for shard_idx, offsets in plan.iter_ordered_pairs():
-            for offset in offsets:
-                yield int(shard_idx), int(offset)
+        yield from plan.iter_ordered_refs()
+
+    def _open_shard_memmap(self, shard_idx: int) -> np.memmap:
+        shard = self._manifest_view.eligible_shards[shard_idx]
+        mem = np.memmap(shard.bin_path, dtype=np.uint16, mode="r")
+        if int(mem.shape[0]) != shard.token_count:
+            raise ValueError(
+                f"token count mismatch for {shard.bin_path}: "
+                f"sidecar={shard.token_count} memmap={int(mem.shape[0])}"
+            )
+        return mem
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
         worker_info = get_worker_info()
         if worker_info is not None:
             raise RuntimeError(
-                "TinyLlamaP15PretokIterableDataset supports single-worker mode only; "
+                "Sp16kPretokIterableDataset supports single-worker mode only; "
                 "use DataLoader(..., num_workers=0)."
             )
 
         block_size = self.config.block_size
         window_len = block_size + 1
+        current_shard_idx: int | None = None
+        current_mem: np.memmap | None = None
 
         for shard_idx, offset in self._iter_shard_offsets():
-            mem = self._memmaps[shard_idx]
+            if current_shard_idx != shard_idx or current_mem is None:
+                current_mem = self._open_shard_memmap(shard_idx)
+                current_shard_idx = shard_idx
+            mem = current_mem
             window = mem[offset : offset + window_len]
             if int(window.shape[0]) != window_len:
                 raise RuntimeError(

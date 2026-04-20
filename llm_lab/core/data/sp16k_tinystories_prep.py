@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from llm_lab.core.data.pretok_dataset_contract import (
-    TinyLlamaP15PretokDatasetConfig,
+    Sp16kPretokDatasetConfig,
     load_runtime_manifest_view,
 )
 from llm_lab.core.data.pretok_shards import (
@@ -14,7 +14,7 @@ from llm_lab.core.data.pretok_shards import (
     ROOT_MANIFEST_FILENAME,
     validate_split_manifest_structure,
 )
-from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import (
+from llm_lab.core.tokenization.sp16k_tokenizer_artifact import (
     TOKENIZER_CONTRACT_VERSION,
     load_tokenizer_from_artifact_dir,
 )
@@ -136,7 +136,7 @@ def _resolve_from_config_dir(raw: str, *, config_dir: Path) -> Path:
     return p
 
 
-def preflight_p15_train_config(config_path: Path) -> dict[str, Any]:
+def preflight_sp16k_train_config(config_path: Path) -> dict[str, Any]:
     cfg_path = Path(config_path).expanduser().resolve()
     config_dir = cfg_path.parent
     payload = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -171,7 +171,7 @@ def preflight_p15_train_config(config_path: Path) -> dict[str, Any]:
 
     block_size = int(model_cfg["block_size"])
     train_view = load_runtime_manifest_view(
-        TinyLlamaP15PretokDatasetConfig(
+        Sp16kPretokDatasetConfig(
             root_dir=train_root_dir,
             split=train_split,  # type: ignore[arg-type]
             block_size=block_size,
@@ -179,7 +179,7 @@ def preflight_p15_train_config(config_path: Path) -> dict[str, Any]:
         )
     )
     val_view = load_runtime_manifest_view(
-        TinyLlamaP15PretokDatasetConfig(
+        Sp16kPretokDatasetConfig(
             root_dir=val_root_dir,
             split=val_split,  # type: ignore[arg-type]
             block_size=block_size,

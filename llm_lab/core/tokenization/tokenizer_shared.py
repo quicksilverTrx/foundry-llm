@@ -14,7 +14,7 @@ ID2SPECIAL = {i: s for s, i in RESERVED_SPECIAL_TOKENS.items()}
 SPECIAL_RE = re.compile(r"<\|[^|]+?\|>")
 _BASIC_TOKEN_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?|\d+|[^\w\s]+", re.UNICODE)
 
-# TinyLlama bridge START: tinyllama_p15 pretokenizer spec contract
+# SP16K bridge START: sp16k pretokenizer spec contract
 PRETOKENIZER_SPEC_VERSION = "tinyllama_p15.v1"
 
 
@@ -40,4 +40,4 @@ def get_pretokenizer_spec() -> Dict[str, str]:
     }
 
 
-# TinyLlama bridge END: tinyllama_p15 pretokenizer spec contract
+# SP16K bridge END: sp16k pretokenizer spec contract

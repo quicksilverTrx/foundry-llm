@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 from llm_lab.core.tokenization.subword_tokenizer import SubwordTokenizer, SubwordTokenizerConfig
-from llm_lab.core.tokenization.tinyllama_p15_tokenizer_artifact import compute_tokenizer_hash
+from llm_lab.core.tokenization.sp16k_tokenizer_artifact import compute_tokenizer_hash
 
 def test_tokenizer_repeated_save_load_is_identical(tmp_path: Path):
     text = "to be or not to be that is the question"
