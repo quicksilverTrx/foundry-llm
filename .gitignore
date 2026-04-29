@@ -19,6 +19,8 @@
 !results/nanollama_8l_training.csv
 !results/ablation_summary.csv
 !data/hellaswag_val.jsonl
+!data/serving_eval/prompts.jsonl
+!data/serving_eval/rubric.md
 *.DS_Store
 experiments/serving_research/raw/*
 experiments/
