@@ -21,6 +21,9 @@
 !data/hellaswag_val.jsonl
 !data/serving_eval/prompts.jsonl
 !data/serving_eval/rubric.md
+!docs/serving.md
+!experiments/serving_model_provenance.md
+!experiments/nanollama_serving_provenance.md
 *.DS_Store
 experiments/serving_research/raw/*
 experiments/

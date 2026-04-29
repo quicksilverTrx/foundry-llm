@@ -329,15 +329,22 @@ cfg, tok, model = load_model_package("artifacts/my_run")
 
 ---
 
-## Serving API
+## Serve NanoLlama 8L
+
+The serving layer is tokenizer-agnostic and supports two model formats:
+
+- `--loader package` (default) — sp16k SubwordTokenizer packages
+- `--loader nanollama` — raw `.pt` checkpoints with tiktoken GPT-2
+
+### HTTP
 
 ```bash
-# Start the server (NanoLlama checkpoint + tiktoken)
+# Start the server
 python scripts/serving/serve.py \
   --package experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt \
   --loader nanollama --device cpu --dtype fp32
 
-# Sync generate
+# Sync generation
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
   -d '{"prompt": "The meaning of life is", "max_new_tokens": 64, "temperature": 0.8, "top_k": 40}'
@@ -352,7 +359,31 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/metrics
 ```
 
-For sp16k package models, omit `--loader` (defaults to `package`).
+Every response returns `ttft_ms`, `prefill_ms`, `decode_ms_per_token`, `tokens_per_sec`, `stop_reason`, and `safety_flags`.
+
+### Programmatic
+
+```python
+from llm_lab.core.package.nanollama_loader import load_nanollama_checkpoint
+from llm_lab.serving.engine import Engine
+
+cfg, tokenizer, model = load_nanollama_checkpoint(
+    "experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt",
+    device="cpu",
+)
+engine = Engine(model=model, tokenizer=tokenizer,
+                block_size=cfg.block_size, max_cache_len=cfg.block_size)
+
+out = engine.generate(
+    prompt_ids=tokenizer.encode("Once upon a time"),
+    attention_mask=None, max_new_tokens=64,
+    temperature=0.7, top_k=40,
+    eos_token_id=tokenizer.eos_token_id,
+)
+print(out["completion_text"])
+```
+
+For full API reference, code structure, and tokenizer interface contract see [`docs/serving.md`](docs/serving.md).
 
 ---
 

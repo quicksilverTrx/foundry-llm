@@ -1,0 +1,45 @@
+.DS_Store
+.git
+.gitignore
+.pytest_cache
+.venv
+.vscode
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.tmp
+*.log
+*.tar
+*.tar.gz
+HF_Token.txt
+artifacts/
+**/artifacts/
+experiments/
+**/experiments/
+# Exclude top-level data/ and common data subdirs (but NOT llm_lab/core/data/ — that's source code)
+data/
+char_real/data/
+.docker-local/**/data/
+foundry_llm.egg-info/
+**/foundry_llm.egg-info/
+logs/
+**/logs/
+notebooks/
+source.save
+
+# Stray log/scratch files in repo root
+*.txt
+runpod_1
+runpod_1.pub
+runpod_api_key
+backblaze.txt
+
+# Docker-local smoke run artifacts (baked in for local verify only)
+.docker-local/foundry-llm-runtime/experiments/
+.docker-local/foundry-llm-runtime/data/
+.docker-local/foundry-llm-runtime/bundles/
+.docker-local/foundry-llm-runtime/reports/

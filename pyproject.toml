@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foundry-llm"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = ["sentencepiece>=0.2.0", "datasets>=2.20.0", "tiktoken>=0.5.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["llm_lab*"]

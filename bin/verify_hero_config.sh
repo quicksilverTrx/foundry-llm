@@ -42,7 +42,7 @@ docker run --rm \
   "${PLATFORM_ARGS[@]}" \
   -v "${WORKSPACE_DIR}:/workspace" \
   "${IMAGE_REF}" \
-  python scripts/p15_runpod_pipeline.py --mode verify-local --workspace-root /workspace/foundry-llm-runtime
+  python scripts/runpod_pipeline.py --mode verify-local --workspace-root /workspace/foundry-llm-runtime
 
 append_runpod_journal_entry "${REPO_ROOT}" "${CURRENT_STAGE}" "success" "${CURRENT_COMMAND}" "image_ref=${IMAGE_REF}, workspace_dir=${WORKSPACE_DIR}" "verify_workspace=/workspace/foundry-llm-runtime"
 trap - ERR

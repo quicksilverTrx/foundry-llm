@@ -16,12 +16,12 @@ Usage:
     ./bin/restart_remote_pipeline.sh
 
 Optional direct command override:
-  REMOTE_HOST=<host> DIRECT_COMMAND="python scripts/p15_train_nanollama.py --config ..." \
+  REMOTE_HOST=<host> DIRECT_COMMAND="python scripts/pretrain_nanollama.py --config ..." \
     ./bin/restart_remote_pipeline.sh
 
 Environment:
   REMOTE_HOST           Required. SSH host or gateway target.
-  MODE                  Pipeline mode for p15_runpod_pipeline.py. Default: auto
+  MODE                  Pipeline mode for runpod_pipeline.py. Default: auto
   EXTRA_PIPELINE_ARGS   Extra args appended after --workspace-root.
   DIRECT_COMMAND        If set, runs this command instead of the pipeline mode.
   REMOTE_USER           Remote SSH user. Default: root
@@ -75,7 +75,7 @@ fi
 if [[ -n "${DIRECT_COMMAND}" ]]; then
   remote_command="ulimit -n 65535 || true; ${DIRECT_COMMAND}"
 else
-  remote_command="ulimit -n 65535 || true; python scripts/p15_runpod_pipeline.py --mode ${MODE} --workspace-root ${WORKSPACE_ROOT}"
+  remote_command="ulimit -n 65535 || true; python scripts/runpod_pipeline.py --mode ${MODE} --workspace-root ${WORKSPACE_ROOT}"
   if [[ -n "${EXTRA_PIPELINE_ARGS}" ]]; then
     remote_command="${remote_command} ${EXTRA_PIPELINE_ARGS}"
   fi
@@ -83,7 +83,7 @@ fi
 
 "${ssh_cmd[@]}" "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<EOF
 set -euo pipefail
-pkill -f "p15_runpod_pipeline.py|p15_train_nanollama.py|tinyllama_p15_prepare_finewebedu.py" || true
+pkill -f "runpod_pipeline.py|pretrain_nanollama.py|prepare_dataset.py" || true
 cd '${REMOTE_REPO_DIR}'
 mkdir -p '${WORKSPACE_ROOT}/logs'
 nohup bash -lc "$(printf "%q" "${remote_command}") >> '${WORKSPACE_ROOT}/logs/pipeline.log' 2>&1" >/dev/null 2>&1 &

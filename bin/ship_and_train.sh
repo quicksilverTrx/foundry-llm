@@ -75,7 +75,7 @@ payload = {
         "-lc",
         # Keep the remote start command aligned with the image's normal auto
         # mode so legacy API launches behave like manual provider launches.
-        "mkdir -p {root}/logs && python scripts/p15_runpod_pipeline.py --mode auto --workspace-root {root} 2>&1 | tee -a {root}/logs/pipeline.log".format(
+        "mkdir -p {root}/logs && python scripts/runpod_pipeline.py --mode auto --workspace-root {root} 2>&1 | tee -a {root}/logs/pipeline.log".format(
             root=os.environ["WORKSPACE_ROOT"]
         ),
     ],

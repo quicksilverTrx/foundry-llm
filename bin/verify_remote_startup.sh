@@ -42,7 +42,7 @@ docker run --rm \
   -e HF_HOME=/tmp/hf-empty \
   -e HF_TOKEN= \
   "${IMAGE_REF}" \
-  bash -lc 'mkdir -p /tmp/hf-empty && cd /app/foundry-llm && python scripts/p15_runpod_pipeline.py --mode auto --workspace-root /workspace/foundry-llm-runtime' \
+  bash -lc 'mkdir -p /tmp/hf-empty && cd /app/foundry-llm && python scripts/runpod_pipeline.py --mode auto --workspace-root /workspace/foundry-llm-runtime' \
   > "${MISSING_AUTH_LOG}" 2>&1
 MISSING_AUTH_STATUS=$?
 set -e
@@ -65,7 +65,7 @@ if [[ -f "${HF_TOKEN_FILE}" ]]; then
     "${PLATFORM_ARGS[@]}" \
     -e HF_TOKEN="${HF_TOKEN_VALUE}" \
     "${IMAGE_REF}" \
-    bash -lc "cd /app/foundry-llm && python -c \"import sys; sys.path.insert(0, '/app/foundry-llm/scripts'); import p15_runpod_pipeline as pipeline; pipeline._initialize_hf_auth(require_token=True); print('HF_AUTH_OK')\"" \
+    bash -lc "cd /app/foundry-llm && python -c \"import sys; sys.path.insert(0, '/app/foundry-llm/scripts'); import runpod_pipeline as pipeline; pipeline._initialize_hf_auth(require_token=True); print('HF_AUTH_OK')\"" \
     > "${AUTH_OK_LOG}" 2>&1
   grep -q "HF_AUTH_OK" "${AUTH_OK_LOG}"
 fi
