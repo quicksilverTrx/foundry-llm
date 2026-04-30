@@ -12,7 +12,7 @@ if [[ ! -f "${DEFAULT_HF_TOKEN_FILE}" ]]; then
   DEFAULT_HF_TOKEN_FILE="${HOME}/.cache/huggingface/token"
 fi
 
-IMAGE_REPO="${IMAGE_REPO:-docker.io/sohomc/foundry-llm-runpod}"
+IMAGE_REPO="${IMAGE_REPO:-docker.io/your-dockerhub-username/foundry-llm-runpod}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
 IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
 PUSH_LATEST="${PUSH_LATEST:-0}"

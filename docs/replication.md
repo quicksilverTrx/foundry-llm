@@ -2,6 +2,9 @@
 
 Exact steps to reproduce the full NanoLlama 8L pretraining result from scratch.
 
+> **Already have the local run?** All artifact locations (checkpoints, logs, CSVs) are indexed in [`docs/local_artifacts.md`](local_artifacts.md).
+> Final checkpoint is at `experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt`.
+
 ---
 
 ## Hardware requirements

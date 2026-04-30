@@ -30,12 +30,16 @@ class MiniGPTConfig:
     pos_encoding_type: Literal["learned", "sinusoidal", "rope"] = "learned"
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
-    arch_family :Literal["miniGPT","nanollama"] = "miniGPT"
+    arch_family: Literal["miniGPT", "nanollama", "swiftllama"] = "miniGPT"
     tie_weights: bool = False   # share token_embed ↔ lm_head (saves params; correct for small LLaMA-style models)
     use_sdpa: bool = False      # enable F.scaled_dot_product_attention in every attention block
 
     logit_softcap: Optional[float] = None
     qk_norm: bool = False
+
+    rope_fraction: float = 1.0      # fraction of head dims to rotate with RoPE; 1.0=full, 0.5=partial
+    n_value_embeds: int = 0         # per-layer learned value-embedding bias vectors (0=disabled)
+    use_x0_mixin: bool = False      # per-layer residual mixing: x = λ*x + λ₀*x₀ (x₀=embed output)
 
     def __post_init__(self):
         if self.attention_type == "gqa":
@@ -125,16 +129,28 @@ class MiniGPT(nn.Module):
             dropout=config.dropout,
             norm_type=config.norm_type,
             mlp_type=config.mlp_type,
-            use_rope= (config.pos_encoding_type=="rope"),
-            attention_type = config.attention_type,
+            use_rope=(config.pos_encoding_type == "rope"),
+            attention_type=config.attention_type,
             num_kv_heads=config.num_kv_heads,
             rope_scaling_factor=config.rope_scaling_factor,
-            rope_scaling_type = config.rope_scaling_type,
+            rope_scaling_type=config.rope_scaling_type,
+            rope_fraction=config.rope_fraction,
             use_sdpa=config.use_sdpa,
             qk_norm=config.qk_norm,
+            n_value_embeds=config.n_value_embeds,
         )
 
         self.blocks = nn.ModuleList([TransformerBlock(block_cfg) for _ in range(config.n_layers)])
+
+        # x0-mixin: per-layer scalars λ (init=1) and λ₀ (init=0).
+        # With init values, output is identical to standard residual.
+        if config.use_x0_mixin:
+            self.x0_lambda  = nn.ParameterList(
+                [nn.Parameter(torch.ones(1))  for _ in range(config.n_layers)]
+            )
+            self.x0_lambda0 = nn.ParameterList(
+                [nn.Parameter(torch.zeros(1)) for _ in range(config.n_layers)]
+            )
 
         # Final norm + LM head
         self.ln_f = make_norm(config.norm_type,config.d_model)
@@ -210,20 +226,33 @@ class MiniGPT(nn.Module):
         assert x.ndim == 3 and x.shape[0] == B and x.shape[1] == T, \
             f"x must be [B,T,D] before blocks; got {tuple(x.shape)}"
 
-        for block_index,block in enumerate(self.blocks):
+        # x0-mixin: save embedding output before blocks.
+        x0 = x if self.config.use_x0_mixin else None
+
+        for block_index, block in enumerate(self.blocks):
             layer_past = None
-            if past_key_values is not None : 
-                 assert (len(past_key_values)) == self.config.n_layers
-                 # Per-layer cache shape is [B, H_kv, T_past, D].
-                 layer_past = past_key_values[block_index]
+            if past_key_values is not None:
+                assert len(past_key_values) == self.config.n_layers
+                # Per-layer cache shape is [B, H_kv, T_past, D].
+                layer_past = past_key_values[block_index]
 
-            x,present_key_value = block(x, position_ids=position_indices if self.config.pos_encoding_type == "rope" else None, 
-                      attention_mask = attention_mask_bool ,past_key_value = layer_past ,use_cache = use_cache)
+            x, present_key_value = block(
+                x,
+                position_ids=position_indices if self.config.pos_encoding_type == "rope" else None,
+                attention_mask=attention_mask_bool,
+                past_key_value=layer_past,
+                use_cache=use_cache,
+            )
+
+            # x0-mixin: x = λ * x + λ₀ * x₀
+            if self.config.use_x0_mixin:
+                lam  = self.x0_lambda[block_index]   # scalar
+                lam0 = self.x0_lambda0[block_index]  # scalar
+                x = lam * x + lam0 * x0
+
             if use_cache:
-
                 if present_key_value is None:
                     raise RuntimeError(f"Block {block_index} returned no present key/value while use_cache=True")
-                
                 new_past.append(present_key_value)
         x = self.ln_f(x)
         x = self.lm_head(x) # [B, T, vocab_size]

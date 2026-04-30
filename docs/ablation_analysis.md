@@ -1,8 +1,9 @@
 # Architecture Ablation — Full Re-Audit
 **Date:** 2026-03-31
 
-**Branch:** feat/tinyllama-pretrain
-
+> Swap run logs: `experiments/tinyllama_pretrain_2026-03-31/phase5_swaps/swap{0-7}/`
+> GPT-2 baseline checkpoint: `experiments/tinyllama_pretrain_2026-03-31/phase4_baseline/ckpts/model_02009.pt`
+> Results summary: `results/ablation_summary.csv`
 
 ---
 
@@ -240,18 +241,7 @@ Impractical. GPT-2 baseline is an approximation for SWAP 7 comparison only.
 
 ---
 
-## 6. Reporting Errors This Session
-
-| Error | What Happened | Corrected |
-|-------|--------------|-----------|
-| SWAP 4/5 status confusion | Reported SWAP 5 log lines (step 100–400 at 07:00–07:44 UTC) as SWAP 4 | ✅ Corrected when user queried estimate accuracy |
-| ETA revision after SWAP 4 | SWAP 4 finished at 06:46 UTC = 02:46 EST (original estimate exact). Revised upward was wrong | ✅ Confirmed after reading full log |
-| SDPA false positive (prior session) | Grepped main branch for SDPA, didn't check if runtime config enabled it on this branch | Already acknowledged in prior audit |
-| B×GA parity claim (prior session) | Claimed same B×GA = same LR schedule, ignored step-indexed warmup difference | Already corrected; led to GPT-2 baseline plan |
-
----
-
-## 7. Pre-Phase-6 Fixes Status
+## 6. Pre-Phase-6 Fixes Status
 
 | Fix | Applied | Correct | NanoLlama 8L Impact |
 |-----|---------|---------|----------------|
@@ -263,19 +253,7 @@ Impractical. GPT-2 baseline is an approximation for SWAP 7 comparison only.
 
 ---
 
-## 8. Pending Work
-
-| Task | Status | ETA |
-|------|--------|-----|
-| SWAP 7 complete (Full NanoLlama 8L) | 🔄 step ~200/500 | ~04:53 EST |
-| STOP GATE 5b: report all 8 swap deltas | Pending SWAP 7 | ~04:53 EST |
-| GPT-2 baseline: B=16 GA=32 warmup=200 500 steps (reference for NanoLlama 8L) | Not started | ~05:23 EST |
-| NanoLlama 8L pretraining: write + launch | Not started | ~05:53 EST |
-| Update plan docs: n_layers 12→8 | Not done | Now |
-
----
-
-## 9. NanoLlama 8L Config
+## 7. NanoLlama 8L Config
 
 ```python
 # NanoLlama 8L — full target architecture
@@ -296,9 +274,3 @@ grad_clip=1.0, bfloat16=True, fused AdamW
 
 Total training tokens: 4768 × 524,288 ≈ **2.5B tokens**
 Estimated time: 4768 steps × 6.2 sec/step ≈ **8.2 hours**
-
----
-
-*Report generated: 05:31 EST*
-*Running log: `/workspace/logs/claude_code_execution_log.md`*
-*Branch: `feat/tinyllama-pretrain`*

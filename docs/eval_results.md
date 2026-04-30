@@ -3,9 +3,15 @@
 **Date:** 2026-03-31
 **Scope:** Pipeline integration (ShardLoader, lr_schedule, ShardTrainer) + full model eval suite
 
+> **Local artifact locations** → see [`docs/local_artifacts.md`](local_artifacts.md) for all checkpoint paths, log files, and trajectory CSVs.
+>
+> **NanoLlama 8L final checkpoint:** `experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt` (487 MB)
+> **Training log:** `experiments/tinyllama_pretrain_2026-03-31/phase6/run.log`
+> **Trajectory CSV:** `experiments/tinyllama_pretrain_2026-03-31/phase6/trajectory.csv` (also committed as `results/nanollama_8l_training.csv`)
+
 ---
 
-## 1. What Was Implemented This Session
+## 1. Pipeline Integration: ShardLoader, LR Schedule, and ShardTrainer
 
 ### 1.1 Bug Fix: `llm_lab/core/train/optim.py`
 
@@ -57,7 +63,7 @@ dl = DataLoader(ds, batch_size=16)  # plugs into existing Trainer
 - `file_pattern` is configurable so non-FineWeb naming works too
 - `reset()` is idempotent — safe to call multiple times before val eval
 
-**Relationship to the pretokenized shard dataset (`TinyLlamaP15PretokIterableDataset`):**
+**Relationship to the pretokenized shard dataset (`Sp16kPretokIterableDataset`):**
 - NOT the same: that loads `.bin` files with sidecar manifests, SHA256 checks, and epoch sampling plans
 - ShardLoader loads raw `.npy` shards (FineWeb-Edu format) — a different format entirely
 - Both are needed; they serve different data pipelines
@@ -215,7 +221,7 @@ Total: 29 passed in 2.20s
 
 Pre-existing passing tests: 65 still pass after `optim.py` bug fix.
 Pre-existing failures (unrelated to this work):
-- `test_tinyllama_p15_fineweb_prep.py::test_rehearsal_lane_*` — missing `scripts/p15_preflight_nanollama.py` in worktree (not in this branch)
+- `test_sp16k_fineweb_prep.py::test_rehearsal_lane_*` — missing `experiments/p15_archive/scripts/p15_preflight_nanollama.py` in worktree (not in this branch)
 - `test_trainer.py::test_loss_decreases_tiny` — missing `data/tiny_shakespeare.txt` (data file, not code)
 
 ---
@@ -437,29 +443,16 @@ The architectural features (RoPE +0.386, SwiGLU +0.139) provide real improvement
 
 ---
 
-## 4. Summary of Gap Checks vs `pipeline_integration_plan.md`
+## 4. Component Status
 
-The `pipeline_integration_plan.md` identified these gaps and the status after this session:
+| Component | Module | Status |
+|-----------|--------|--------|
+| ShardLoader (.npy) | `llm_lab/core/data/shard_loader.py` | ✅ Done |
+| ShardIterableDataset | Included in shard_loader.py | ✅ Done |
+| LR schedule | `llm_lab/core/train/lr_schedule.py` | ✅ Done |
+| ShardTrainer + config | `llm_lab/core/train/shard_trainer.py` | ✅ Done |
+| Checkpoint save/resume | `ShardTrainer.save_checkpoint/load_checkpoint` | ✅ Done |
+| fused AdamW (CPU/MPS safe) | `llm_lab/core/train/optim.py` | ✅ Done |
+| Unit tests | 29 tests passing | ✅ Done |
 
-| Gap | Planned | Implemented | Status |
-|-----|---------|-------------|--------|
-| ShardLoader (.npy) | Priority 1 | `llm_lab/core/data/shard_loader.py` | ✅ Done |
-| ShardIterableDataset | Priority 6 | Included in shard_loader.py | ✅ Done |
-| LR schedule | Priority 2 | `llm_lab/core/train/lr_schedule.py` | ✅ Done |
-| ShardTrainer + config | Priority 3 | `llm_lab/core/train/shard_trainer.py` | ✅ Done |
-| Checkpoint save/resume | Priority 4 | ShardTrainer.save_checkpoint/load_checkpoint | ✅ Done |
-| pretrain_nanollama_v2.py (smoke test) | Priority 5 | Not written — ShardTrainer tests cover it | ⚠️ Deferred |
-| bf16 autocast in Trainer | Low | Not done | ❌ Pending |
-| fused AdamW in Trainer | Low | Existing Trainer already uses it (after bug fix) | ✅ Done (via bug fix) |
-| Unit tests | Medium | 29 tests written and passing | ✅ Done |
-
-**Remaining gap:** `Trainer` still expects `DataLoader`, not `ShardLoader` directly. The `ShardIterableDataset` bridge exists but has not been wired into a `pretrain_nanollama_v2.py` end-to-end smoke test. This is the only unfinished item from the original plan.
-
----
-
-## 5. Commits Made This Session
-
-| Hash | Message |
-|------|---------|
-| `3478a70` | Add FineWeb-Edu shard pipeline and fix optim fused-AdamW on CPU/MPS |
-| `551a8c6` | Fix eval_suite: ring-buffer for test 10, add flush=True to perplexity prints |
+**Note:** `Trainer` expects `DataLoader`, not `ShardLoader` directly. The `ShardIterableDataset` bridge exists for use with the existing `Trainer`. `ShardTrainer` is the preferred path for shard-based pretraining.
