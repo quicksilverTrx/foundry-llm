@@ -276,7 +276,8 @@ foundry-llm/
 │   ├── eval_results.md            ← full eval suite output + implementation notes
 │   ├── qualitative_eval.md        ← 8-prompt generation samples on NanoLlama v2 with per-sample analysis
 │   ├── replication.md             ← step-by-step reproduction guide
-│   ├── serving_project_deliverables.md ← full serving layer spec: win conditions, phase deliverables, benchmark numbers
+│   ├── serving_results.md             ← KV-cache speedup, TTFT/TPS grid, int8 quant measurements
+│   ├── serving_project_deliverables.md ← full serving layer spec: win conditions, phase deliverables
 │   └── serving_nanollama_tiktoken.md ← tiktoken ↔ serving layer integration guide
 ├── results/
 │   ├── nanollama_8l_training.csv  ← full 4 768-step training trajectory
@@ -433,6 +434,21 @@ The serving layer is tokenizer-agnostic and supports two model formats:
 
 - `--loader package` (default) — sp16k SubwordTokenizer packages
 - `--loader nanollama` — raw `.pt` checkpoints with tiktoken GPT-2
+
+### Measured results (CPU M1 Pro, fp32)
+
+| Metric | Value |
+|--------|-------|
+| KV-cache decode speedup vs recompute | **11×** (17.8 ms/tok vs 196 ms/tok, prompt=256) |
+| TTFT at ctx=256 / 512 / 1024 (B=1) | **100 ms / 189 ms / 463 ms** |
+| Steady-state TPS at ctx=256 / 512 / 1024 | 56 / 49 / 42 |
+| int8 memory vs fp32 | **154 MB vs 486 MB (−68%)** |
+| int8 decode speedup | **1.27× faster** (13.9 vs 17.6 ms/tok) |
+| int8 PPL drift | +6.0% (268 → 284) |
+| Cache equivalence gate (max logit diff) | **2.1e-05** at prompt=256 |
+| Test suite | **152 pass, 0 fail** |
+
+TTFT scales quadratically with context (compute-bound prefill). Decode TPS is stable across batch sizes (memory-bandwidth-bound weight loading). int8 helps large models (bandwidth-bound decode) but slows prefill (quantization overhead). Full grid and quant breakdown: [`docs/serving_results.md`](docs/serving_results.md).
 
 ### HTTP
 
