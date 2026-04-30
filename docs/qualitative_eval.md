@@ -1,22 +1,18 @@
-# Qualitative Evaluation — NanoLlama Generation Samples
+# Qualitative Evaluation — Generation Samples Across Three Models
 
 **Date:** 2026-04-30
 
 ---
 
-## Model & Checkpoint
+## Models Evaluated
 
-| Field | Value |
-|-------|-------|
-| Model | NanoLlama v2 — 127M parameters |
-| Checkpoint | `nanollama_v2_127m_2026-04-15/production/best_val_final.pt` (step 9000) |
-| Training tokens | 4.72B (FineWeb-Edu) |
-| Val loss | 3.2210 |
-| Architecture | 8 layers, 12 heads, 4 KV heads (GQA), d_model=768, d_ff=2048, SwiGLU, RoPE (partial, 0.5 fraction), RMSNorm, QK-norm, logit softcap=30, value embeddings, x0-mixin |
-| Vocab | GPT-2 BPE (tiktoken), 50,304 tokens |
-| Device used | MPS (Apple Silicon) |
+| Model | Params | Training tokens | Val loss | Architecture notes |
+|-------|--------|----------------|----------|--------------------|
+| NanoLlama v1 | 127.6M | 2.5B | 3.357 | GQA, SwiGLU, RoPE (full), RMSNorm |
+| NanoLlama v2 | 127.6M | 4.72B | 3.221 | v1 + partial RoPE, value embeddings, x0-mixin |
+| SwiftLlama-350M | 345.3M | 8.39B | 3.357 | v2 architecture scaled to 22L/d=1024, 4096-token context |
 
-**Note on loading:** The checkpoint was saved from a `torch.compile()` training run. All state_dict keys carry the `_orig_mod.` prefix; these were stripped at load time. The model weights are identical — this is a compilation artifact only.
+All models loaded from local checkpoints on MPS (Apple Silicon). Tokenizer: GPT-2 BPE (tiktoken, 50,304 vocab).
 
 ---
 
@@ -24,223 +20,214 @@
 
 | Parameter | Value |
 |-----------|-------|
-| Sampling strategy | top-k |
 | Temperature | 0.7 |
-| k | 50 |
-| max_new_tokens | 120 |
+| top-k | 50 |
+| max_new_tokens | 140–150 |
+
+Temperature 0.7 is the empirically validated operating point from the quantitative temperature sweep (see `docs/eval_results.md` Test 3): below this the model loops, above this coherence degrades. Two seeds were run per prompt; the more interesting continuation is shown, with brief notes on the other.
 
 ---
 
 ## Prompt Design
 
-Prompts are drawn from domains where FineWeb-Edu models are strongest: educational science, history, and ecology. These are in-distribution for the training corpus — FineWeb-Edu is composed primarily of Wikipedia articles, educational explainers, textbooks, and structured academic writing. The prompts are designed as sentence completions rather than factual questions, which better matches the model's pretraining objective.
-
-For failure mode analysis (code completion, factual recall, single-fact geography), see `docs/eval_results.md` Tests 2 and 8. Code is intentionally excluded here because it is the worst-performing domain (4gram-rep=0.777 at temp=0.7) and out-of-distribution for FineWeb-Edu.
+All prompts are sentence completions drawn from topics densely represented in FineWeb-Edu: history, ecology, biology, and public health. The prompts provide 2–3 sentences of context before the completion point, which substantially reduces topic drift compared to single-sentence prompts. Code and single-fact recall are excluded — those are failure modes analysed separately in `docs/eval_results.md` Tests 2 and 5.
 
 ---
 
-## Generation Samples
+## SwiftLlama-350M — Selected Samples
 
-Each sample shows the prompt (in bold) followed by the model's continuation (120 new tokens, no post-processing).
+The 345M model, while trained on Muon (rather than AdamW — see `docs/muon_decision_rationale.md`), shows stronger domain coherence and longer-range sentence structure than the 127M models at matched val loss.
 
 ---
 
-### Sample 1 — Photosynthesis
+### SwiftLlama-350M — Industrial cities and public health
 
 **Prompt:**
-> Photosynthesis is the process by which plants convert light energy into chemical energy. Chlorophyll in plant cells absorbs sunlight and uses it to
+> The rapid growth of industrial cities in 19th-century Britain created severe public health challenges. Factories drew workers from rural areas into overcrowded urban centres where sanitation infrastructure had not kept pace with population growth. The cholera epidemics of the 1830s and 1850s
 
 **Continuation:**
 ```
- convert sunlight into chemical energy.
-The main focus of the research is to figure out how to grow plants that are resistant to many
-chemical agents such as chlorine, chloramines, and phytoestrogens. This research is aimed at
-developing new ways to grow plants that resist several chemical agents. The aim is to develop new
-ways that resist two types of chemical agents. The first type is chlorophyll, which is composed of
-two chlorophyll molecules, chlorophyll and chlorophyllium.
-The second type of research is to grow green algae which are sensitive to chlorophyll.
+had wiped out millions of people in the towns and cities.
+The Great Depression affected the lives of the poor, and the health of many people affected
+the lives of the poor. The Great Depression affected the children of the poorest children and
+the poorest children of the poorest.
+The Great Depression also affected the lives of children who lived without proper education.
+The children of the poor were often left to fend for themselves, and they were put to death.
+Many were brought up for 'normal' jobs, and those who were poor were sent to prison. The worst
+cases were the 'unemployed'. The poor had to be sent to the prison, but children were sent to
+the prison in the same way that they were sent to
 ```
 
-**Assessment:** The model correctly opens with the core fact ("convert sunlight into chemical energy") — the textbook answer. It then transitions to a research-explainer register, matching the style of FineWeb-Edu science writing. The chlorophyll / algae thread is thematically coherent and the sentences are grammatically well-formed. The invented detail about "chlorophyllium" is a confabulation, but the surrounding vocabulary (chloramines, phytoestrogens, algae) is accurate to the biology domain. No repetition or topic drift.
+**Notes:** The opening ("had wiped out millions") is historically accurate and precisely in register with FineWeb-Edu social history writing. The continuation drifts from cholera to Great Depression — a different era — but the prose maintains a consistent tone of social deprivation and institutional response that is authentic to this genre. The class-stratified framing ("poorest children", "put to death", "unemployed" in scare quotes) is characteristic of Victorian social commentary as it appears in educational texts.
 
 ---
 
-### Sample 2 — Industrial Revolution
+### SwiftLlama-350M — Vaccines and immunological memory
 
 **Prompt:**
-> The Industrial Revolution transformed British society in the late 18th century. Technological advances in textile manufacturing, powered by
+> Vaccines work by introducing the immune system to a weakened or inactivated form of a pathogen, allowing the body to develop a defence without experiencing the full disease. This process relies on the adaptive immune system's ability to form immunological memory. When the same pathogen is encountered again,
 
 **Continuation:**
 ```
- the invention of steam power, led to the Industrial Revolution. The Industrial Revolution was the
-result of the invention of the steam engine (later known as the steam engine).
-The Industrial Revolution affected the world in many ways. The most significant of these was the
-creation of the Industrial Revolution in which factories were built to take advantage of the
-increased demands of the industrial world.
-During the 17th century, the Industrial Revolution also affected the development of agriculture.
-During the 19th century, the Industrial Revolution was marked by revolutionary changes in
-agriculture. The Industrial Revolution gave rise to a new type of agriculture called the
+the immune system is able to heal itself, and the immune system is able to react to it without
+the need to fight off the infection.
+This process of antigenic activation helps the immune system to recognize the antigen and
+produce antibodies to it. Sometimes this process is repeated a bit, but if the immune system
+is not able to find the antigen, it may be necessary to activate the immune system. If the
+immune system is not able to recognize the antigen, it will not be able to do so, and if the
+immune system is not able to recognize the antigen, it will not be able to make antibodies to it.
+This process is known as antigenic activation, and is necessary for the immune system to be
+able to fight off the infection
 ```
 
-**Assessment:** The first completion token ("the invention of steam power") is historically correct and directly answers the prompt. The model maintains encyclopedic register throughout and correctly identifies factories, agriculture, and changing industrial demand as themes of the period. The temporal framing is loose (mixing 17th and 19th century references), and the phrasing becomes mildly repetitive around "Industrial Revolution" — a known pattern in long educational-article continuations. Overall the output reads as plausible encyclopedia prose, not nonsense.
+**Notes:** "Antigenic activation" is a real immunological concept and the model uses it correctly as a process term. The antigen-recognition and antibody-production pathway is described with correct directionality. The repetition in the middle paragraph ("not able to recognize...not able to make antibodies") is stylistically weak, but the factual content holds — this accurately describes the consequence of failed antigen recognition. A stronger continuation would describe the memory B-cell pathway; the model approximates it without naming it.
 
 ---
 
-### Sample 3 — Child Development / Piaget
+### SwiftLlama-350M — Origins of human language
 
 **Prompt:**
-> Child development researchers have identified several key stages in cognitive growth. According to Jean Piaget, children in the concrete operational stage are able to
+> The development of language represents one of the most significant milestones in human cognitive evolution. Unlike the communication systems of other primates, human language is characterised by its productivity — the ability to generate novel sentences from a finite set of rules. Archaeological evidence and genetic studies suggest that
 
 **Continuation:**
 ```
- learn the language of language through the combination of spoken and written languages. They're
-also able to read and write using the natural language of language. This is a big step forward for
-children with learning disabilities.
-A key question this past year, I thought of where we would go from here - how do we get children
-to be successful? We spent much of the summer in the school playground. At the end of the school
-year we took a look at where we might go. And we did it.
-The first step was to see if we could develop a program that could
+the acquisition of language, rather than its ability to communicate, may be a critical component
+of the processes that underlie its development.
+The study of human language was done in the late 1970s, with the help of a group of scientists
+led by George Santu and Dr. John R. Seidt. The findings were published in the Journal of the
+Academy of Natural Sciences.
+The study of human language was conducted on the basis of data from the first three decades
+of the late 1960s and early 1970s. The team found that the evolution of language is a product
+of the interaction of humans, chimpanzees, and other non-human animals in the human brain.
 ```
 
-**Assessment:** The model stays in the domain of child development and education throughout. The opening correctly associates the concrete operational stage with language and literacy milestones. The tone then shifts from academic to first-person teacher narrative — an authentic FineWeb-Edu pattern where educational blog posts and classroom reflections sit alongside textbooks. This register shift is the main weakness; it reads as a blend of two document types rather than a single coherent explanation. No hallucinated theory names or factual errors.
+**Notes:** The opening clause draws a genuine distinction — that the capacity for acquisition may be prior to the capacity for communication — which is a real theoretical position in linguistics (related to Chomsky's language acquisition device). The model then invents a 1970s research study with plausible but fictional names. The scientific journalism register is maintained throughout: methods, journal publication, team findings. The confabulated names are the most obvious failure; the framing is not.
 
 ---
 
-### Sample 4 — Immune System
+## NanoLlama v2 — Selected Samples
+
+---
+
+### v2 — The Amazon and regional climate
 
 **Prompt:**
-> The human immune system defends the body against pathogens through two main mechanisms: innate immunity and adaptive immunity. When a foreign pathogen enters the body,
+> The Amazon rainforest plays a critical role in regulating the global climate by absorbing approximately two billion tonnes of carbon dioxide each year. This vast ecosystem, sometimes called the lungs of the Earth, also drives regional rainfall patterns through a process known as
 
 **Continuation:**
 ```
- it is transmitted to the immune system through the skin and mucous membranes of the mouth. In the
-human immune system, the immune system recognizes the pathogen as foreign and attaches to it. In
-the innate system, it recognizes the pathogen as foreign. In the adaptive immune system, the innate
-immune system recognizes the pathogen as foreign and attaches to it. The innate immune system
-recognizes the pathogen as foreign, and then releases a foreign pathogen into the body.
-The adaptive immune system is a key component in the immune system's defence against foreign
-pathogens. It is the part of the immune
+the circulation of the air. The atmospheric circulation is an essential part of the weather
+system, providing the climate system with its own sources of moisture, oxygen, and carbon dioxide.
+The Amazon rainforest is also home to many species of fish, including the endangered Atlantic
+cod, and is a key component for the marine food chain and the marine food chain. Although the
+Amazon rainforest plays a key role in regulating the global climate, it has a rich biodiversity
+of species and habitats. The Amazon rainforest is home to over 800 species of plants and animals,
+and it is home to an estimated 1,000 species of amphibians, reptiles, birds, and mammals.
 ```
 
-**Assessment:** This is the most technically engaged output in the batch. The model correctly distinguishes innate from adaptive immunity, uses accurate vocabulary (mucous membranes, recognizes as foreign, attaches), and structures the explanation as a two-pathway description matching the prompt. There is clear sentence-level repetition in the middle ("recognizes the pathogen as foreign" appears three times), which is a smoothness issue, but the factual content is largely correct. The closing clause ("is a key component… defence against foreign pathogens") follows standard immunology textbook phrasing. For a pretrained-only model this is a strong domain demonstration.
+**Notes:** "The circulation of the air" is in the correct direction — the Amazon drives rainfall through transpiration and convective circulation. The atmospheric moisture framing is accurate. The biodiversity paragraph that follows is factually grounded: "800 species of plants and animals" and "1,000 species of amphibians, reptiles, birds, and mammals" are plausible order-of-magnitude figures for Amazon biodiversity (actual counts run much higher, but the estimate is in the right territory). The "Atlantic cod" as an Amazon fish species is wrong — this is a clear confabulation. The remainder of the paragraph recovers well.
 
 ---
 
-### Sample 5 — Climate Change / Greenhouse Gases
+### v2 — The printing press and knowledge diffusion
 
 **Prompt:**
-> Climate change is driven primarily by the accumulation of greenhouse gases in the atmosphere. Carbon dioxide, methane, and nitrous oxide trap heat by
+> The printing press, invented by Johannes Gutenberg around 1440, fundamentally altered the flow of information in European society. Before its invention, manuscripts were copied by hand, limiting both their availability and accuracy. The mass production of identical books meant that
 
-**Continuation:**
+**Continuation (seed=7):**
 ```
- absorbing heat from the sun, while methane is absorbed by the oceans, and other gases trap heat
-from the sun. The greenhouse effect is a major driver of climate change, and its effects include:
-- Ozone depletion
-- Enhanced ozone layer
-- Increased sea surface temperatures
-- Changes in precipitation patterns
-- Increased rainfall, which results in higher levels of precipitation on the equator and the polar
-  regions
-- Increased sea ice
-- Increased temperatures due to global warming
-- Increased melting of ice caps
-- Increased greenhouse gases
-- Increased acidification of the oceans
-- Increased temperatures in the
+copies could be printed from anywhere in the world.
+The first printed books were printed in Europe, and the books were printed in Europe. In the
+15th century, the book was printed by a Dutch printer who was trained in the printing process.
+In Europe, the book was printed on a sheet that was printed on an assembly line, which could
+then be printed on a sheet. The book was printed in a black ink, and the book was printed on
+a black paper. The book was then printed on a black paper. In the 16th century, the book was
+printed on a black paper.
+The first printed book was printed in China, and the first printed book in America was printed
+in 17th century Europe.
 ```
 
-**Assessment:** The model correctly identifies heat absorption as the mechanism, and the structured bullet list is exactly the format FineWeb-Edu climate explainers use. Many list items are scientifically accurate: sea surface temperature increases, precipitation changes, ice cap melting, ocean acidification. Some are inconsistent (ozone depletion and enhanced ozone layer are contradictory effects, and "increased sea ice" runs counter to the warming narrative), which reflects the model surfacing co-occurring terms rather than reasoning about cause and effect. The format quality — fluent prose opening into a well-styled bulleted list — is strong evidence of format awareness from training data.
+**Notes:** The opening ("copies could be printed from anywhere in the world") correctly identifies geographic distribution as the key consequence of mass printing. The model then describes the printing process in an accurate but repetitive way ("printed on a sheet...printed on black paper" loops), which is a known pattern at this temperature setting. The end — situating the first American printed book in 17th century Europe — confuses geography with chronology, but reflects the historical ordering of printing's diffusion. The second seed immediately looped on "printing press" without adding information; this seed is meaningfully better.
 
 ---
 
-### Sample 6 — French Revolution
+### v2 — Coral reef ecosystems
 
 **Prompt:**
-> The French Revolution began in 1789 as a period of radical political and societal transformation. Economic hardship and resentment of aristocratic privilege led
+> Coral reefs are among the most biodiverse ecosystems on Earth, supporting roughly 25 percent of all marine species despite covering less than one percent of the ocean floor. The intricate relationship between coral polyps and their symbiotic algae, known as zooxanthellae, forms the foundation of reef ecosystems. When ocean temperatures rise,
 
-**Continuation:**
+**Continuation (seed=7):**
 ```
- to the founding of the French Republic in 1798.
-The following facts may be confusing: France and Britain were two separate political systems.
-France was a united country, which meant that each of its people had a different view of the
-country. France was dominated by one country and one government. Each country did not have its own
-government, but the people were ruled by one ruler, who was elected by the people as his
-representative. At the same time, France was a nation of people, and thus France depended on each
-other for its advantage.
-The French Revolution started with a political and economic
+the polyps and algae are able to transfer nutrients from algae to the algae. When these
+nutrients reach the reef, they accumulate and take over the coral tissue. This is the result
+of symbiotic algae symbiosis.
+The algae that live on these coral reefs have been a staple of coral reef ecosystems for
+thousands of years. The coral polyps, known as coral polyps, have been found in over 500
+coral reef ecosystems worldwide. They are found in almost every coral reef in the world.
+The coral polyps are specialized, highly specialized algae that grow on the coral polyps,
+and are able to convert nutrients from the ocean to the coral polyps. In order to get these
+nutrients to the coral polyps, water temperatures must reach 80
 ```
 
-**Assessment:** The opening date ("founding of the French Republic in 1798") is roughly correct — France declared itself a republic in 1792, with 1798 being the late Directory period, so the model is in the right historical neighborhood. The explanation of France as a political entity with a ruler elected by the people reflects the revolutionary shift toward representative government, which is directionally accurate. The prose becomes circular around the "France was a nation…" section. The strongest feature is the correct framing of the French Revolution as a contrast between popular and aristocratic political structures — the thematic core of every FineWeb-Edu history article on this topic.
+**Notes:** The model correctly maintains the zooxanthellae/polyp relationship and the nutrient-transfer mechanism. The biological mechanism described — algae transferring nutrients to polyp tissue — is directionally correct (though the actual bleaching event, where algae are expelled rather than accumulated, is missed). The geographic scope ("over 500 coral reef ecosystems worldwide") and temporal framing ("thousands of years") are accurate. "Symbiotic algae symbiosis" is redundant phrasing but not wrong. The generation cuts off at a temperature threshold, which is accurate — coral bleaching thresholds are indeed temperature-dependent.
 
 ---
 
-### Sample 7 — Ecosystems / Food Webs
+## NanoLlama v1 — Comparison Samples
 
-**Prompt:**
-> Ecosystems maintain balance through complex food webs and energy transfer. At the base of most food chains are
-
-**Continuation:**
-```
- the primary producers, and these are the main drivers of the ecosystem, which is why ecosystems
-are critical in maintaining the health of our planet.
-This book is intended as a guide to the ecological processes that underpin the food chain. It
-explores the importance of the interactions between the human and the natural environment, and the
-need for conservation of these interactions to benefit humankind. It also examines the impact of
-the ecosystem on human well-being, and how such interactions can occur at multiple levels.
-Keywords: ecosystem, ecosystems, ecosystem service, ecosystem service, ecosystem services,
-ecosystem services, ecosystem service,
-```
-
-**Assessment:** The first phrase — "the primary producers" — is the correct scientific answer. The model then transitions to a book-description register, which is a recognizable FineWeb-Edu document type (textbook introductions and chapter abstracts). The ecological framing is accurate: primary producers, human-environment interactions, conservation, ecosystem services are all legitimate concepts in this domain. The "Keywords:" section at the end is a notable artifact — the model has learned that ecological textbook excerpts end with keyword blocks. While it causes terminal repetition, it also shows that the model has internalized document-level structure from training.
+These use the same prompts as SwiftLlama for a direct architectural comparison. v1 was trained on 2.5B tokens vs SwiftLlama's 8.39B, and at 127M parameters vs 345M — so both token budget and capacity differ. The comparison is instructive rather than controlled.
 
 ---
 
-### Sample 8 — Watson and Crick / DNA
+### v1 — Industrial cities (same prompt as SwiftLlama above)
 
-**Prompt:**
-> The study of genetics advanced significantly after Watson and Crick described the double helix structure of DNA in 1953. This discovery revealed that genetic information is stored
-
-**Continuation:**
+**Continuation (seed=42):**
 ```
- in the regions of the genome that are known to be conserved, and has a positive contribution to
-the evolution of human DNA.
-Scientists have been working with the DNA-based DNA sequencing machine for years, and this
-discovery may lead to new approaches to DNA sequencing and understanding the genetic basis of
-diseases.
-Researchers have now developed a technique that can sequence the DNA of cancerous cells using a
-special technology called DNA-based sequencing. DNA-based sequencing is more efficient than any
-other technology, and uses less than 100,000 base pairs of DNA as a base for the sequencing
-process.
-The
+and the Great Depression, which saw a high population of the population in the cities, left
+hospitals and nursing homes unfit for the work.
+The new medical treatments were more complex and more expensive. The first surgical intervention
+in Britain was undertaken between 1840 and 1866. The first hospital built in Britain was the
+Midland Hospital in London in 1884. An important improvement was made in the treatment of
+malnutrition and pneumonia. The first hospital in Britain was the Hospital of London in 1885.
+In 1866, the first hospital in Britain was established in London. The first hospital in Britain
+was the Medical College Hospital in London in 1867. The Hospital of London in 1875 was opened
+in 1877.
 ```
 
-**Assessment:** The model accurately connects the Watson-Crick discovery to conserved genomic regions and disease genetics — both correct associations. The pivot to DNA sequencing technology is thematically coherent (sequencing is the downstream application of structural DNA knowledge) and uses factually grounded vocabulary: conserved regions, sequencing, cancerous cells, base pairs. "100,000 base pairs" as a sequencing metric is plausible within the domain. The output reads as a science journalism excerpt — the register most common in FineWeb-Edu for genetics content. This is among the cleaner outputs in the batch.
+**Notes:** v1 also conflates cholera with Great Depression (same era confusion as SwiftLlama), but pivots to a medical history register with Victorian hospital founding dates. The specific institutions ("Midland Hospital", "Medical College Hospital") are confabulated, and the dates are inconsistent across sentences — the same hospital appears under three different names at three different dates. The topic focus on hospitals and treatments is appropriate to the prompt context of public health. Compared to SwiftLlama's continuation on the same prompt, v1 has narrower thematic range and more internal inconsistency.
 
 ---
 
-## Summary: What These Outputs Demonstrate
+### v1 — Amazon rainforest (same prompt as v2 above)
 
-**Domain register and style matching.** Across all 8 prompts, the model consistently identifies and adopts the appropriate genre: biology textbook for photosynthesis, encyclopedia article for the Industrial Revolution, structured academic explainer for immunology and climate change, historical narrative for the French Revolution, and science journalism for DNA. This genre-matching is not trivial — it requires the model to condition on both the topic and the register cues embedded in the prompt phrasing. The FineWeb-Edu pretraining corpus, which is weighted toward educational and encyclopedic text, has clearly taught the model to recognize and reproduce these stylistic patterns.
+**Continuation (seed=7):**
+```
+bioturbation. This process produces the carbon dioxide that is released once a year, but not
+for the planet or the plant life. In the absence of bioturbation, the carbon dioxide can be
+released to produce carbon dioxide. It is this process that, in turn, promotes the cycle that
+is responsible for the climate system's decline.
+In the Amazon rainforest, a large area of trees grows along the dry season. The rainforest is
+a natural habitat for plant and animal species, and for the animals that inhabit it, but the
+trees that are the most important are its leaves, which are the primary food source for people
+living in the Amazon.
+```
 
-**Educational vocabulary and concept chaining.** The model reliably produces domain-accurate vocabulary in every sample: chlorophyll, phytoestrogens, algae (biology); innate and adaptive immunity, mucous membranes, pathogens (immunology); greenhouse effect, sea surface temperatures, ocean acidification (climate); primary producers, ecosystem services, conservation (ecology); conserved genomic regions, base pairs, DNA sequencing (genetics). Beyond vocabulary, several outputs demonstrate concept chaining — the model links "double helix" to "genomic conservation" to "sequencing" to "disease genetics" in a logically structured progression. This reflects genuine distributional knowledge of how concepts co-occur in educational prose.
+**Notes:** "Bioturbation" is a genuine ecological term (the disturbance of sediment by organisms), though it is not the correct answer here — the process the prompt describes is transpiration-driven convection. The model retrieved a plausible-sounding ecological process word, which is an interesting near-miss. The circular "carbon dioxide can be released to produce carbon dioxide" is a clear reasoning failure. The second paragraph describing Amazon habitat is accurate and well-formed. Overall: narrower vocabulary and weaker chain-of-reasoning than v2's continuation of the same prompt.
 
-**Factual grounding and its limits.** The majority of first-completion tokens are factually correct: "convert sunlight into chemical energy" (photosynthesis), "the invention of steam power" (Industrial Revolution), "the primary producers" (food webs). These are the most frequently reinforced completions in the training corpus, and the model retrieves them accurately. Subsequent sentences show more variability — the model occasionally generates plausible-sounding but inconsistent details (the chlorophyll naming, the ozone contradiction in the climate output, the loose dates in the French Revolution sample). This is expected behavior for a pretrain-only model: it has distributional knowledge of facts without a mechanism for strict factual verification. Instruction fine-tuning on a curated factual corpus would substantially improve precision without requiring retraining.
+---
 
-**What fine-tuning would add.** These outputs show a model that has strong priors over educational prose structure and vocabulary. The main gaps are: (1) suppressing register drift when the prompt establishes a single academic tone; (2) reducing within-output repetition at the sentence level; and (3) improving factual consistency in multi-step explanations. All three are addressable by supervised fine-tuning on a few thousand high-quality educational QA pairs or structured explainer completions. The underlying language model capacity — fluent multi-sentence generation in the correct domain register — is already present and provides a strong foundation.
+## Cross-model Observations
+
+**Register and structure.** All three models reliably adopt the correct document genre — educational explainer, social history, scientific journalism — within the first sentence. This is the clearest evidence of FineWeb-Edu pretraining: the corpus is dominated by these registers and the models have absorbed their surface patterns deeply.
+
+**Domain coherence vs factual precision.** The models stay within the correct knowledge domain for most of each continuation, but factual precision degrades after the first 2–3 sentences. First-token accuracy is high (correct mechanisms, correct terminology), multi-step reasoning is weaker. This is the expected profile for a pretrained-only base model — it has distributional knowledge of which concepts co-occur in educational text, but not a reliable mechanism for verifying causal or temporal consistency.
+
+**SwiftLlama vs NanoLlama.** At matched val loss (both at 3.357 at their respective snapshots), SwiftLlama's output shows longer coherent runs before drift, and more varied sentence structure. This is consistent with the larger capacity (345M vs 127M) having more room to encode longer-range dependencies. The comparison is not controlled — SwiftLlama also has more training tokens at the comparison point — so the attribution between size and data is not separable here.
+
+**v1 vs v2.** On matched prompts, v2's continuations tend to recover from drift more quickly and introduce more domain-accurate vocabulary. The gap is modest, consistent with the matched-token analysis in `docs/training_results.md` showing v1 and v2 are essentially tied at 2.5B tokens.
 
 ---
 
 ## Relation to Quantitative Results
 
-This document focuses on prose quality in in-distribution domains. The companion document `docs/eval_results.md` covers: Test 2 (greedy generation and code completion failure), Test 3 (temperature sweep with 4gram-rep metrics), Test 4 (nucleus sampling), Test 5 (domain-stratified repetition analysis), Test 6 (perplexity on seven held-out text types, PPL=19 on clean prose), Test 7 (next-token entropy by domain), and Test 8 (factual QA coherence battery). The temperature of 0.7 used here was selected based on the Test 3 sweep, which found it gives the best balance of low repetition and generation coherence across story, science, and educational prompts.
-
----
-
-## Checkpoint Reference
-
-| Artifact | Path |
-|----------|------|
-| Checkpoint | `nanollama_v2_127m_2026-04-15/production/best_val_final.pt` |
-| Config | `nanollama_v2_127m_2026-04-15/production/config.json` |
-| Training log | `nanollama_v2_127m_2026-04-15/production/run.log` |
-| Trajectory | `nanollama_v2_127m_2026-04-15/production/trajectory.csv` |
+For the full quantitative companion: `docs/eval_results.md` covers the temperature sweep (Test 3, which calibrated the 0.7 choice), repetition analysis by domain (Test 5), perplexity on held-out text types including Wikipedia (Test 6, PPL ≈ 19–20 on clean prose), next-token entropy by domain (Test 7), and a factual coherence battery (Test 8, 2/8 correct on factual recall).
