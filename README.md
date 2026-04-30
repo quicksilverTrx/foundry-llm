@@ -247,6 +247,18 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 - **Apr 2026 (architecture + scale)** — second-generation architecture adds partial RoPE, per-layer value-embedding biases, and x0-mixin residual from the nanochat line; training budget doubled to ~5B tokens. Matched-token analysis shows v1 and v2 are essentially tied at 2.5B, with the full −0.136 nat improvement attributable to the larger budget — isolating the architectural contribution requires a control run (v1 to 4.72B on the same schedule) that is scoped for future work. SwiftLlama-350M scaled to 345M parameters with 4096-token context. Launched with Muon based on the speedrunning community's ~5× efficiency claim; a 1500-step ablation (Phase 2A) confirmed AdamW wins by 0.19 nats on GQA+SwiGLU — a clear negative transfer result from MHA+ReLU². Both findings are examples of running the right control experiment before committing: scale up the architecture, then verify the optimizer. AdamW is the default going forward; SwiftLlama reaches val 3.357 at step 16 000.
 ---
 
+## Key design decisions
+
+Two decisions that shaped the serving layer and are non-obvious from the code alone:
+
+**1. Correctness before performance — the cache equivalence gate.**
+The KV-cache engine was gated on a step-by-step logit equivalence test before any latency work started. For each prompt, generation runs two ways: (a) prefill once + N decode steps using the KV cache, (b) full context recompute at every step. The test asserts per-step greedy token match and max absolute logit difference within `atol=1e-4`. NanoLlama 8L passes at max diff **2.09e-05** (prompt=256) and **1.91e-05** (prompt=512). No performance tuning proceeded until this gate was green. The motivation: KV-cache bugs (RoPE offset off-by-one, mask mismatch, append ordering) are silent — shapes match, output looks reasonable, but logits are subtly wrong. The equivalence gate is the only reliable way to catch them.
+
+**2. The GQA serving dividend — architecture and inference are not separable.**
+GQA (4 KV heads vs 12 query heads) was chosen during the architecture ablation for training throughput (single batched SDPA call vs 12 per-head calls: 38K→60K tok/s). The serving payoff compounds this: each decode step loads K and V weight matrices that are 3× smaller than MHA (768×256 vs 768×768 per head), reducing per-step memory bandwidth by 3×. KV-cache memory also drops from 48 MB (MHA at block_size=1024) to 16 MB (GQA 4:1) — a free reduction from the same architectural choice. The int8 result amplifies this further: quantizing 147MB of GQA weights is considerably cheaper than quantizing 486MB of MHA weights. Architectural choices made for training efficiency have compounding effects on inference cost — they are not independent decisions.
+
+---
+
 ## Repository layout
 
 ```
@@ -437,18 +449,26 @@ The serving layer is tokenizer-agnostic and supports two model formats:
 
 ### Measured results (CPU M1 Pro, fp32)
 
-| Metric | Value |
-|--------|-------|
-| KV-cache decode speedup vs recompute | **11×** (17.8 ms/tok vs 196 ms/tok, prompt=256) |
-| TTFT at ctx=256 / 512 / 1024 (B=1) | **100 ms / 189 ms / 463 ms** |
-| Steady-state TPS at ctx=256 / 512 / 1024 | 56 / 49 / 42 |
-| int8 memory vs fp32 | **154 MB vs 486 MB (−68%)** |
-| int8 decode speedup | **1.27× faster** (13.9 vs 17.6 ms/tok) |
-| int8 PPL drift | +6.0% (268 → 284) |
-| Cache equivalence gate (max logit diff) | **2.1e-05** at prompt=256 |
-| Test suite | **152 pass, 0 fail** |
+**KV-cache:** 11× decode speedup (17.8 ms/tok cached vs 196 ms/tok recompute, prompt=256 gen=128). TTFT and steady-state TPS across the operating range:
 
-TTFT scales quadratically with context (compute-bound prefill). Decode TPS is stable across batch sizes (memory-bandwidth-bound weight loading). int8 helps large models (bandwidth-bound decode) but slows prefill (quantization overhead). Full grid and quant breakdown: [`docs/serving_results.md`](docs/serving_results.md).
+| Context | TTFT (B=1) | TPS (B=1) | TPS (B=2) | TPS (B=4) |
+|---------|-----------|-----------|-----------|-----------|
+| 256 | 100ms | 56 | 56 | 56 |
+| 512 | 189ms | 49 | 50 | 51 |
+| 1024 | 463ms | 42 | 40 | 43 |
+
+TTFT scales roughly as O(context²) — compute-bound prefill. Decode TPS is flat across batch sizes — memory-bandwidth-bound weight loading. Both patterns are explained in [`docs/serving_results.md`](docs/serving_results.md).
+
+**int8 quantization** (dynamic, qnnpack, weight-only, no calibration required):
+
+| Mode | Decode | Prefill | Memory | PPL |
+|------|--------|---------|--------|-----|
+| fp32 | 17.6 ms/tok | 118ms | 486 MB | 268.2 |
+| int8 | 13.9 ms/tok | 341ms | **147 MB** | 284.3 |
+
+int8 decode is 1.27× faster (bandwidth-bound). int8 prefill is 2.9× slower (compute-overhead on quantization). 147 MB vs 486 MB is the difference that matters for memory-constrained deployment. fp16/bf16 fall back to fp32 on CPU with an explicit reason string; they execute natively on CUDA. The serving layer selects int8 as the CPU default via a quality-gated recommendation (`best_tradeoff_quality_gated`).
+
+**Tests:** 152 pass, 0 fail. Cache equivalence gate: max logit diff **2.09e-05** (prompt=256), exact greedy token match.
 
 ### HTTP
 
