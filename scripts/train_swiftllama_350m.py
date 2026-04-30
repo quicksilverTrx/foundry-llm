@@ -7,14 +7,14 @@ Default config: 345M params, 15B tokens (~28,610 steps), RTX 4090.
 Quick-start (pod)
 -----------------
     python3 scripts/train_swiftllama_350m.py \\
-        --data_dir /workspace/build-nanogpt/edu_fineweb10B \\
-        --run_dir  /workspace/runs/swiftllama_350m
+        --data_dir ./data/edu_fineweb10B \\
+        --run_dir  ./runs/swiftllama_350m
 
 OOM fallback (fits in <22 GB)
 ------------------------------
     python3 scripts/train_swiftllama_350m.py \\
-        --data_dir /workspace/build-nanogpt/edu_fineweb10B \\
-        --run_dir  /workspace/runs/swiftllama_350m \\
+        --data_dir ./data/edu_fineweb10B \\
+        --run_dir  ./runs/swiftllama_350m \\
         --block_size 2048 --batch_size 4 --grad_accum 64
 
 Kill rules (auto-applied)

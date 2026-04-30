@@ -29,15 +29,15 @@ Quick start (H100 pod)
 ---------------------
     # Probe N1 (nanochat Muon, v2 arch, 1500 steps)
     python3 scripts/train_nanollama_v2.py \\
-        --data_dir /workspace/edu_fineweb10B \\
-        --run_dir  /workspace/runs/nanollama_v2/N1 \\
+        --data_dir ./data/edu_fineweb10B \\
+        --run_dir  ./runs/nanollama_v2/N1 \\
         --optimizer muon_adam --max_steps 9537 --run_steps 1500 \\
         --batch_size 16 --grad_accum 32 --compile
 
     # Production run (9537 steps, uses winning probe config)
     python3 scripts/train_nanollama_v2.py \\
-        --data_dir /workspace/edu_fineweb10B \\
-        --run_dir  /workspace/runs/nanollama_v2/production \\
+        --data_dir ./data/edu_fineweb10B \\
+        --run_dir  ./runs/nanollama_v2/production \\
         --optimizer muon_adam --max_steps 9537 \\
         --batch_size 16 --grad_accum 32 --compile
 

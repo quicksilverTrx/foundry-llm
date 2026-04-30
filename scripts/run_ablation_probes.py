@@ -9,19 +9,19 @@ runs (not recommended on a single GPU).
 
 Usage:
     python3 scripts/run_ablation_probes.py \\
-        --data-dir /workspace/edu_fineweb10B \\
-        --runs-dir /workspace/runs/ablation \\
+        --data-dir ./data/edu_fineweb10B \\
+        --runs-dir ./runs/ablation \\
         --probes configs/ablation/A1_current_baseline.yaml \\
                  configs/ablation/A2_muon_with_wd.yaml \\
                  configs/ablation/A3_adamw.yaml
 
 Run a single probe:
     python3 scripts/run_ablation_probes.py \\
-        --data-dir /workspace/edu_fineweb10B \\
-        --runs-dir /workspace/runs/ablation \\
+        --data-dir ./data/edu_fineweb10B \\
+        --runs-dir ./runs/ablation \\
         --probe-name A1_current_baseline
 
-The runner appends a summary table to /workspace/runs/ablation/probe_results.md
+The runner appends a summary table to ./runs/ablation/probe_results.md
 after each probe completes.
 """
 from __future__ import annotations
@@ -192,7 +192,7 @@ def main() -> int:
     )
     ap.add_argument("--data-dir", required=True,
                     help="Directory with edufineweb_*.npy shards")
-    ap.add_argument("--runs-dir", default="/workspace/runs/ablation",
+    ap.add_argument("--runs-dir", default="./runs/ablation",
                     help="Parent directory for per-probe run dirs")
     ap.add_argument("--probes", nargs="*", default=None,
                     help="Paths to probe YAML files (default: all in configs/ablation/)")

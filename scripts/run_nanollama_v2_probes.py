@@ -9,16 +9,16 @@ Usage
 -----
     # Run all three probes
     python3 scripts/run_nanollama_v2_probes.py \\
-        --data-dir /workspace/edu_fineweb10B \\
-        --runs-dir /workspace/runs/nanollama_v2/probes \\
+        --data-dir ./data/edu_fineweb10B \\
+        --runs-dir ./runs/nanollama_v2/probes \\
         --probes configs/ablation/N1_muon_nanochat.yaml \\
                  configs/ablation/N2_adamw.yaml \\
                  configs/ablation/N3_base_arch_muon.yaml
 
     # Single probe by name
     python3 scripts/run_nanollama_v2_probes.py \\
-        --data-dir /workspace/edu_fineweb10B \\
-        --runs-dir /workspace/runs/nanollama_v2/probes \\
+        --data-dir ./data/edu_fineweb10B \\
+        --runs-dir ./runs/nanollama_v2/probes \\
         --probe-name N1_muon_nanochat
 
     # Resume / skip completed
@@ -217,7 +217,7 @@ def main() -> int:
     )
     ap.add_argument("--data-dir", required=True,
                     help="Directory with edufineweb_*.npy shards")
-    ap.add_argument("--runs-dir", default="/workspace/runs/nanollama_v2/probes",
+    ap.add_argument("--runs-dir", default="./runs/nanollama_v2/probes",
                     help="Parent directory for per-probe run dirs")
     ap.add_argument("--probes", nargs="*", default=None,
                     help="Paths to probe YAML files")

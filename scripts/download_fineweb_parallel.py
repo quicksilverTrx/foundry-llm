@@ -20,7 +20,7 @@ Expected wall time: ~40-70 min on H100 pod (HF download is the bottleneck).
 Usage:
     export HF_TOKEN=hf_...
     python3 scripts/download_fineweb_parallel.py \\
-        --out-dir /workspace/edu_fineweb10B \\
+        --out-dir ./data/edu_fineweb10B \\
         --workers 16
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ def main() -> int:
         description="FineWebEDU-10BT download + tokenize (Karpathy spec)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    ap.add_argument("--out-dir", type=Path, default=Path("/workspace/edu_fineweb10B"))
+    ap.add_argument("--out-dir", type=Path, default=Path("./data/edu_fineweb10B"))
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2),
                     help="Parallel tokenizer worker processes")
     ap.add_argument("--hf-token", type=str, default=None)
