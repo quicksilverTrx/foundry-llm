@@ -1,0 +1,40 @@
+# D1: MHA + ReLU² + Muon — modded-nanogpt reference style (no WD)
+# Architecture: full MHA (16 Q + 16 KV heads), ReLU² MLP, partial RoPE, value embeds, x0-mixin.
+# Optimizer: original modded-nanogpt Muon (no weight decay).
+# d_ff=3320 (multiple of 8) is parameter-matched to GQA+SwiGLU 350M:
+#   MHA extra params/layer: 1024×(4096-2560) = 1.573M × 22 = 34.6M extra
+#   ReLU² vs SwiGLU: 2 vs 3 matrices → need larger d_ff to match
+#   2×1024×3320 vs 3×1024×2728 ≈ 6.79M vs 8.38M per layer
+#   Net difference: ~34.6M - 22×(8.38-6.79)×1M = 34.6M - 34.98M ≈ 0 ✓
+probe_name: D1_mha_relu2_muon
+
+max_steps:    1500
+batch_size:   8
+grad_accum:   16
+block_size:   4096
+warmup_steps: 500
+val_every:    500
+val_steps:    300
+seed:         42
+torch_compile: true
+
+arch:
+  attention_type: mha       # Full MHA (not GQA)
+  num_kv_heads:   16        # MHA = all heads are KV heads
+  n_heads:        16
+  mlp_type:       relu_squared
+  d_ff:           3320      # multiple of 8; param-matched to GQA+SwiGLU
+  norm_type:      rmsnorm
+  pos_encoding_type: rope
+  rope_fraction:  0.5
+  n_value_embeds: 2
+  use_x0_mixin:   true
+  qk_norm:        true
+  tie_weights:    false
+
+optimizer:
+  type:          muon_adam
+  muon_lr:       0.02       # Original modded-nanogpt LR
+  adam_lr:       0.0006
+  weight_decay:  0.0        # Original modded-nanogpt: no WD
+  muon_momentum: 0.95

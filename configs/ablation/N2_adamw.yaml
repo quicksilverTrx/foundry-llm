@@ -1,0 +1,36 @@
+# N2: Full Stack + AdamW
+#
+# Question: Is Muon actually helping, or would standard AdamW do just as well?
+#           Safety net: if N1 explodes (embed_lr=0.3 too aggressive for GQA),
+#           N2 gives clean v2-arch baseline.
+#
+# Architecture: v2 (same as N1: RoPE(50%) + x0-mixin + VE + softcap=30)
+# Optimizer:    standard AdamW (single optimizer, 2 groups: decay/no-decay)
+# Schedule:     cosine with linear warmup
+#
+# CRITICAL: run_steps=1500, max_steps=9537.
+# At step 1500 with cosine from step 200 to 9537:
+#   ratio = (1500−200)/(9537−200) = 1300/9337 ≈ 0.139
+#   LR ≈ 5.75e-4 (95.8% of peak) — comparable to N1/N3 which are at 100% peak.
+probe_name: N2_adamw
+
+max_steps:        9537
+run_steps:        1500
+batch_size:       16
+grad_accum:       32
+block_size:       1024
+warmup_steps:     200      # cosine warmup (matches NanoLlama v1)
+val_every:        500
+val_steps:        300
+seed:             42
+torch_compile:    true
+
+optimizer:
+  type:          adamw
+  adam_lr:       6e-4
+  weight_decay:  0.1       # standard AdamW WD on 2D params; 1D params WD=0
+
+arch:
+  rope_fraction:  0.5      # v2 arch (same as N1)
+  n_value_embeds: 2
+  use_x0_mixin:   true

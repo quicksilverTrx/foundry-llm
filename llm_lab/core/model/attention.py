@@ -122,6 +122,7 @@ class SingleHeadAttentionConfig:
     use_rope: bool = False
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
+    rope_fraction: float = 1.0   # fraction of head dims to rotate; 1.0=full RoPE
     use_sdpa: bool = False   # if True: F.scaled_dot_product_attention; if False: explicit softmax
 
 
@@ -180,7 +181,8 @@ class SingleHeadAttention(nn.Module):
             q_val, k_val = apply_rope(q_val, k_val, position_ids,
                                       rope_scaling_type=self.config.rope_scaling_type,
                                       rope_scaling_factor=self.config.rope_scaling_factor,
-                                      position_offset=past_len,)  # theta default is fine for base RoPE
+                                      position_offset=past_len,
+                                      rope_fraction=self.config.rope_fraction,)
         
         k_present, v_present, _ = _append_past(
             k_val.unsqueeze(1),
@@ -255,8 +257,10 @@ class MultiHeadAttentionConfig:
     num_kv_heads: Optional[int] = None
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
+    rope_fraction: float = 1.0   # fraction of head dims to rotate; 1.0=full RoPE
     use_sdpa: bool = False   # propagated to each head (MHA) or used directly (GQA)
     qk_norm: bool = False    # RMSNorm on Q and K before dot-product (GQA only, LLaMA 3.x style)
+    n_value_embeds: int = 0  # number of per-layer learned value-embedding vectors (0=disabled)
 
 class MultiHeadAttention(nn.Module):
     """
@@ -276,38 +280,45 @@ class MultiHeadAttention(nn.Module):
         
         # Each head has its own q/k/v projections
         if self.attention_type == "mha":
-            single_head_config = SingleHeadAttentionConfig(self.d_model,self.head_dim,config.dropout,use_rope=config.use_rope,
+            single_head_config = SingleHeadAttentionConfig(self.d_model, self.head_dim, config.dropout,
+                                                           use_rope=config.use_rope,
                                                            rope_scaling_type=config.rope_scaling_type,
-                                                        rope_scaling_factor=config.rope_scaling_factor,
-                                                        use_sdpa=config.use_sdpa)
+                                                           rope_scaling_factor=config.rope_scaling_factor,
+                                                           rope_fraction=config.rope_fraction,
+                                                           use_sdpa=config.use_sdpa)
 
             self.heads = nn.ModuleList([SingleHeadAttention(single_head_config) for _ in range(self.n_head)])
-            
+
             # Final projection back to d_model
-            self.out_proj = nn.Linear(self.d_model,self.d_model)
+            self.out_proj = nn.Linear(self.d_model, self.d_model)
             self.dropout = nn.Dropout(config.dropout)
 
         elif self.attention_type == "gqa":
             self.H_kv = self.config.num_kv_heads
-            if self.config.num_kv_heads is  None :
+            if self.config.num_kv_heads is None:
                 raise ValueError("num kv head is None")
-            assert 1<= self.H_kv <= self.n_head
+            assert 1 <= self.H_kv <= self.n_head
             assert self.n_head % self.config.num_kv_heads == 0
             # Linear projections: d_model -> head_dim * n_heads
-            self.q_proj = nn.Linear(self.d_model,self.head_dim * self.n_head)
+            self.q_proj = nn.Linear(self.d_model, self.head_dim * self.n_head)
             # Linear projections: d_model -> head_dim * n_heads_kv
-            self.k_proj = nn.Linear(self.d_model,self.head_dim * self.H_kv)
-            self.v_proj = nn.Linear(self.d_model,self.head_dim * self.H_kv)
+            self.k_proj = nn.Linear(self.d_model, self.head_dim * self.H_kv)
+            self.v_proj = nn.Linear(self.d_model, self.head_dim * self.H_kv)
 
-            
             self.attention_dropout_layer = nn.Dropout(config.dropout)
             self.scale = self.head_dim ** -0.5
-            self.out_proj = nn.Linear(self.d_model,self.d_model)
+            self.out_proj = nn.Linear(self.d_model, self.d_model)
             self.dropout = nn.Dropout(config.dropout)
             self.use_sdpa = config.use_sdpa
             if config.qk_norm:
                 self.q_norm = RMSNorm(self.head_dim)
                 self.k_norm = RMSNorm(self.head_dim)
+            # Value embeddings: n_value_embeds learned vectors added as bias to v after projection.
+            # Shape: [n_value_embeds, H_kv * head_dim] — small; does NOT depend on sequence length.
+            if config.n_value_embeds > 0:
+                self.value_embed = nn.Parameter(
+                    torch.zeros(config.n_value_embeds, self.H_kv * self.head_dim)
+                )
 
 
 
@@ -377,9 +388,15 @@ class MultiHeadAttention(nn.Module):
             if self.config.qk_norm:
                 q = self.q_norm(q)
                 k = self.k_norm(k)
+            # Value embeddings: mix learned bias into v (after proj, before cache/expand).
+            if self.config.n_value_embeds > 0:
+                # value_embed: [n_ve, H_kv * D] — mean over n_ve gives [H_kv * D] bias
+                v_bias = self.value_embed.mean(0).view(1, self.H_kv, 1, D)  # [1, H_kv, 1, D]
+                v = v + v_bias  # broadcast over B and T
+
             # Expand KV to H heads for compute. Cache stays in base H_kv space.
-            k = k.repeat_interleave(repeat,dim=1)
-            v = v.repeat_interleave(repeat,dim=1)
+            k = k.repeat_interleave(repeat, dim=1)
+            v = v.repeat_interleave(repeat, dim=1)
             
             if self.config.use_rope:
                 if position_ids is None:
@@ -387,18 +404,19 @@ class MultiHeadAttention(nn.Module):
                 if position_ids is not None:
                    assert position_ids.ndim == 1 and position_ids.shape[0] == T
 
-                q_batched = q.reshape(B*H,T,D)
-                k_batched = k.reshape(B*H,T,D)
+                q_batched = q.reshape(B*H, T, D)
+                k_batched = k.reshape(B*H, T, D)
                 if past_key_value is not None:
                     past_len = past_key_value[0].shape[2]
-                else :
-                    past_len=0
+                else:
+                    past_len = 0
                 q, k = apply_rope(q_batched, k_batched, position_ids,
                                   rope_scaling_type=self.config.rope_scaling_type,
-                                    rope_scaling_factor=self.config.rope_scaling_factor,
-                                    position_offset=past_len)  # theta default is fine for base RoPE
-                q = q.reshape(B,H,T,D)
-                k = k.reshape(B,H,T,D)
+                                  rope_scaling_factor=self.config.rope_scaling_factor,
+                                  position_offset=past_len,
+                                  rope_fraction=self.config.rope_fraction)
+                q = q.reshape(B, H, T, D)
+                k = k.reshape(B, H, T, D)
 
             # Collapse to base heads so cache ABI remains [B,H_kv,T,D].
             k_base = k[:, ::repeat, :, :]

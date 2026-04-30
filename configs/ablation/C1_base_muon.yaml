@@ -1,0 +1,36 @@
+# C1: Base NanoLlama-at-350M + best Muon LR
+# Full RoPE, no value embeds, no x0-mixin — clean GQA+SwiGLU baseline.
+# Tests whether our custom components (partial RoPE, value embeds, x0-mixin) HELP.
+# NOTE: muon_lr is set to best from {A2, B1, B2} — will be updated by stop-gate 3.
+# Default here is 0.01; update after stop-gate 3 if B1 wins.
+probe_name: C1_base_muon
+
+max_steps:    1500
+batch_size:   8
+grad_accum:   16
+block_size:   4096
+warmup_steps: 500
+val_every:    500
+val_steps:    300
+seed:         42
+torch_compile: true
+
+arch:
+  attention_type: gqa
+  num_kv_heads:   4
+  n_heads:        16
+  mlp_type:       swiglu
+  norm_type:      rmsnorm
+  pos_encoding_type: rope
+  rope_fraction:  1.0       # FULL RoPE (vs partial 0.5)
+  n_value_embeds: 0         # NO value embeds
+  use_x0_mixin:   false     # NO x0-mixin
+  qk_norm:        true
+  tie_weights:    false
+
+optimizer:
+  type:          muon_adam
+  muon_lr:       0.01       # UPDATE to best from B-group after stop-gate 3
+  adam_lr:       0.0006
+  weight_decay:  0.1
+  muon_momentum: 0.95

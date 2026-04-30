@@ -28,3 +28,10 @@
 experiments/serving_research/raw/*
 experiments/
 experiments/tinyllama_pretrain_2026-03-31/*
+vast
+vat_api_key
+source.save
+runpod_1
+runpod_1.pub
+runpod_api_key
+nanollama_v2_127m_2026-04-15/

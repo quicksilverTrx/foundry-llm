@@ -1,0 +1,33 @@
+# B2: Muon lr=0.01 + WD=0.1 — 2× lower than baseline
+# Middle ground between baseline LR and B1.
+probe_name: B2_muon_lr01
+
+max_steps:    1500
+batch_size:   8
+grad_accum:   16
+block_size:   4096
+warmup_steps: 500
+val_every:    500
+val_steps:    300
+seed:         42
+torch_compile: true
+
+arch:
+  attention_type: gqa
+  num_kv_heads:   4
+  n_heads:        16
+  mlp_type:       swiglu
+  norm_type:      rmsnorm
+  pos_encoding_type: rope
+  rope_fraction:  0.5
+  n_value_embeds: 2
+  use_x0_mixin:   true
+  qk_norm:        true
+  tie_weights:    false
+
+optimizer:
+  type:          muon_adam
+  muon_lr:       0.01       # 2× lower than baseline
+  adam_lr:       0.0006
+  weight_decay:  0.1
+  muon_momentum: 0.95
