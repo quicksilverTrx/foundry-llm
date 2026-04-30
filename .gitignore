@@ -19,6 +19,9 @@
 !results/nanollama_8l_training.csv
 !results/ablation_summary.csv
 !data/hellaswag_val.jsonl
+!configs/nanollama_8l.json
+!configs/nanollama_v2_127m.json
+!configs/swiftllama_350m.json
 !data/serving_eval/prompts.jsonl
 !data/serving_eval/rubric.md
 !docs/serving.md

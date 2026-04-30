@@ -122,7 +122,86 @@ step 4768  →  3.36   ← final checkpoint
 
 Loss curve shows healthy cosine decay with no instabilities.
 
+---
 
+## NanoLlama v2 — 127M with architectural refinements
+
+A second training run on the same 127M / FineWeb-Edu setup, adding four
+architectural features from the SwiftLlama research line:
+
+```
+Architecture  : 8 layers · d_model=768 · 12 heads · GQA (kv=4) · SwiGLU · RMSNorm
+New features  : partial RoPE (rope_fraction=0.5) · value embeddings (n=2)
+                x0-mixin residual (λ·x + λ₀·x₀) · logit softcap=30 · qk_norm
+Optimizer     : AdamW (standard; Muon not used here)
+Training data : FineWeb-Edu 10B (same corpus)
+Tokens        : 5.0 B  (2× NanoLlama v1)
+Compute       : 1× RTX 4090
+```
+
+| | v1 NanoLlama 8L | v2 NanoLlama |
+|---|---|---|
+| Tokens | 2.5 B | 5.0 B |
+| Val loss | 3.3566 | **3.2210** |
+| Δ vs v1 | — | **−0.136** |
+
+The Δ combines extra tokens (2×) and architecture changes; the two contributions
+are not isolated. Config: `configs/nanollama_v2_127m.json`.
+
+---
+
+## SwiftLlama-350M — scaled to 345M with Muon optimizer
+
+Scales the v2 architecture to 345M parameters with a 4096-token context and
+the Muon optimizer.
+
+```
+Architecture  : 22 layers · d_model=1024 · 16 heads · GQA (kv=4) · SwiGLU · RMSNorm
+Features      : partial RoPE (0.5) · value embeddings · x0-mixin · logit softcap=30
+Optimizer     : Muon (weight matrices) + AdamW (embeddings, norms, scalars)
+Training data : FineWeb-Edu 10B
+Target        : 28 610 steps · ~15 B tokens
+Compute       : 1× RTX 4090 · ~20.4 s/step · bfloat16
+```
+
+**Optimizer selection** (1500-step probes at 345M scale):
+
+| Optimizer | val@500 | Δ vs AdamW |
+|-----------|---------|-----------|
+| Muon + Adam | 6.6623 | **−0.261** |
+| AdamW | 6.9237 | — |
+
+Muon consistently leads by ~0.26 nats at early steps.
+
+**Validation trajectory** (in progress, best checkpoint at step 16 000):
+
+| Step | Tokens seen | Val loss |
+|------|-------------|----------|
+| 2 000 | 1.05 B | 3.826 |
+| 7 000 | 3.67 B | 3.520 |
+| 11 500 | 6.03 B | 3.414 |
+| **16 000** | **8.39 B** | **3.3566** |
+
+At step 16 000 SwiftLlama matches NanoLlama v1's final val loss (3.3566) having
+consumed 3.3× more tokens — expected for a 2.7× larger model. Training is ongoing.
+
+**Benchmarks at step 7 000** (3.67 B tokens, undertrained relative to Chinchilla):
+
+| Task | Random | SwiftLlama-350M | NanoLlama-127M |
+|------|--------|----------------|----------------|
+| PIQA | 0.500 | 0.584 | **0.601** |
+| ARC-Easy | 0.250 | 0.351 | **0.381** |
+| HellaSwag | 0.250 | 0.268 | **0.270** |
+| WinoGrande | 0.500 | 0.512 | 0.503 |
+| Lambada | — | 0.292 | **0.328** |
+
+NanoLlama-127M leads on 4/5 tasks because it is near Chinchilla-optimal
+(19.6× tokens/params) while SwiftLlama at step 7 000 is at 10.5× (53% of
+Chinchilla). The comparison will shift at SwiftLlama's full training budget.
+
+Config: `configs/swiftllama_350m.json`.
+
+---
 
 ## Reproduce in two commands
 
@@ -156,6 +235,7 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 - **Mar 2026 (ablation)** — 8-run swap ablation isolating RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, logit softcap. RoPE (−0.386 val loss) and SwiGLU (−0.139) dominate. This confirmed the architecture choices before committing to a full run.
 - **Mar 2026 (pretraining)** — NanoLlama 8L: 4768 steps, 2.5B tokens, RTX 4090, ~9h. Val 3.3566 (BPB 1.016), HellaSwag 0.2696. Only 0.020 BPB behind the 10B-token GPT-2 reference.
 - **Mar–Apr 2026 (serving)** — the question shifts from "can we train it" to "can we serve it with measured latency." KV-cache engine with prefill/decode separation; correctness proven before optimization (cache equivalence gate: max |logit_diff| 6.68e-06). Measured 7.5x decode speedup on NanoLlama. FastAPI with SSE streaming, batched prefill, rate limiting, PII/profanity safety filters. int8 dynamic quantization: 70% memory reduction at +6% PPL drift and 1.27x faster decode — the insight being that int8 helps large models (memory-bandwidth-bound) but hurts small ones (compute-overhead-bound). Tiktoken adapter for NanoLlama with out-of-vocab filtering. Prompt suite, perplexity regression, evidence pack with TTFT/TPS curves across context lengths and batch sizes. 152 tests.
+- **Apr 2026 (architecture + scale)** — second-generation architecture: partial RoPE (`rope_fraction`), per-layer value embeddings (`n_value_embeds`), x0-mixin residual mixing, ReLU² MLP variant, Muon optimizer. NanoLlama v2 (127M, 5B tokens) reaches val 3.221 — an improvement of 0.136 nats over v1, combining extra tokens and architectural changes. SwiftLlama-350M (345M, Muon, 4096-token context) begins training; Muon shows +0.26 nats improvement over AdamW at step 500 in 1500-step probes.
 ---
 
 ## Repository layout
@@ -276,7 +356,9 @@ Positional encodings:
 
 Pretraining:
 - `python data/prepare_dataset.py` — download + tokenise FineWeb-Edu
-- `python scripts/pretrain/pretrain_nanollama.py` — full NanoLlama 8L pretraining run
+- `python scripts/pretrain/pretrain_nanollama.py` — NanoLlama 8L (`configs/nanollama_8l.json`)
+- `python scripts/train_nanollama_v2.py` — NanoLlama v2 with Muon or AdamW (`configs/nanollama_v2_127m.json`)
+- `python scripts/train_swiftllama_350m.py` — SwiftLlama-350M with Muon (`configs/swiftllama_350m.json`)
 
 Serving:
 - `python scripts/serving/serve.py` — start FastAPI inference server

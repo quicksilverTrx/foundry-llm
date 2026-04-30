@@ -248,6 +248,31 @@ def build_muon_optimizer(
     return [muon_opt, adam_opt], name_groups
 
 
+def _build_muon_param_groups(
+    model: nn.Module,
+) -> Dict[str, list]:
+    """Split model parameters into the five groups used by the nanochat recipe.
+
+    Returns a dict with keys: muon, embed, unembed, scalar, default.
+    Callers construct Muon and AdamW from these groups with their own LR choices.
+    """
+    groups: Dict[str, list] = {k: [] for k in ("muon", "embed", "unembed", "scalar", "default")}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if "token_embed" in name:
+            groups["embed"].append(p)
+        elif "lm_head" in name:
+            groups["unembed"].append(p)
+        elif "x0_lambda" in name:
+            groups["scalar"].append(p)
+        elif p.ndim >= 2 and not any(x in name for x in ("pos_embed", "value_embed")):
+            groups["muon"].append(p)
+        else:
+            groups["default"].append(p)
+    return groups
+
+
 def build_muon_optimizer_nanochat(
     model: nn.Module,
     *,

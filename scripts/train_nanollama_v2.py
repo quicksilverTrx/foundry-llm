@@ -86,7 +86,7 @@ if str(REPO_ROOT) not in sys.path:
 from llm_lab.core.data.shard_loader import ShardLoader
 from llm_lab.core.model.gpt import MiniGPT, MiniGPTConfig
 from llm_lab.core.train.lr_schedule import constant_warmdown, cosine_with_warmup
-from llm_lab.core.train.muon import build_muon_optimizer_nanochat
+from llm_lab.core.train.muon import Muon, _build_muon_param_groups
 
 
 # ── NanoLlama-127M v2 architecture config ─────────────────────────────────────
@@ -453,17 +453,21 @@ def main() -> None:
             log_path,
         )
     else:
-        optimizers, name_groups = build_muon_optimizer_nanochat(
-            model,
-            muon_lr=args.muon_lr,
-            weight_decay=args.weight_decay,
-            embed_lr=args.embed_lr,
-            unembed_lr=args.unembed_lr,
-            scalar_lr=args.scalar_lr,
-            adam_lr=args.adam_lr,
+        _groups = _build_muon_param_groups(model)
+        muon_opt = Muon(_groups["muon"], lr=args.muon_lr, momentum=0.95,
+                        nesterov=True, weight_decay=args.weight_decay)
+        adam_opt = torch.optim.AdamW(
+            [
+                {"params": _groups["embed"],   "lr": args.embed_lr,   "betas": (0.8, 0.95)},
+                {"params": _groups["unembed"], "lr": args.unembed_lr, "betas": (0.8, 0.95)},
+                {"params": _groups["scalar"],  "lr": args.scalar_lr,  "betas": (0.96, 0.95)},
+                {"params": _groups["default"], "lr": args.adam_lr,    "betas": (0.8, 0.95)},
+            ],
+            lr=args.adam_lr, eps=1e-10, weight_decay=0.0,
         )
-        n_muon = len(name_groups["muon"])
-        n_adam = sum(len(v) for k, v in name_groups.items() if k != "muon")
+        optimizers = [muon_opt, adam_opt]
+        n_muon = len(_groups["muon"])
+        n_adam = sum(len(v) for k, v in _groups.items() if k != "muon")
         _log(
             f"Optimizer: Muon+Adam (nanochat)  "
             f"muon_lr={args.muon_lr}  embed_lr={args.embed_lr}  "
@@ -473,7 +477,9 @@ def main() -> None:
         )
         _log(
             f"  Muon params: {n_muon}  Adam params: {n_adam}"
-            f"  schedule=constant_warmdown  warmdown_ratio={args.warmdown_ratio}",
+            f"  schedule=constant_warmdown  warmdown_ratio={args.warmdown_ratio}"
+            f"  embed_lr={args.embed_lr}  unembed_lr={args.unembed_lr}"
+            f"  scalar_lr={args.scalar_lr}",
             log_path,
         )
 
@@ -587,7 +593,7 @@ def main() -> None:
                 pg["lr"] = current_muon_lr
 
             # Adam groups are ordered: [embed, unembed, scalar, default]
-            # (matches build_muon_optimizer_nanochat group order)
+            # group order: muon_opt (index 0), adam_opt (index 1)
             adam_peak_lrs = [
                 args.embed_lr,
                 args.unembed_lr,

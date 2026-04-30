@@ -1,0 +1,35 @@
+{
+  "comment": "NanoLlama v2 — 127M params, trained on FineWeb-Edu (5B tokens, AdamW)",
+  "arch_family": "nanollama",
+  "vocab_size": 50304,
+  "d_model": 768,
+  "n_layers": 8,
+  "n_heads": 12,
+  "num_kv_heads": 4,
+  "d_ff": 2048,
+  "block_size": 1024,
+  "norm_type": "rmsnorm",
+  "mlp_type": "swiglu",
+  "attention_type": "gqa",
+  "pos_encoding_type": "rope",
+  "rope_fraction": 0.5,
+  "n_value_embeds": 2,
+  "use_x0_mixin": true,
+  "qk_norm": true,
+  "logit_softcap": 30.0,
+  "dropout": 0.0,
+
+  "training": {
+    "optimizer": "adamw",
+    "batch_size": 16,
+    "grad_accum": 32,
+    "block_size": 1024,
+    "max_steps": 9537,
+    "adam_lr": 6e-4,
+    "weight_decay": 0.1,
+    "warmup_steps": 200,
+    "warmdown_ratio": 0.4,
+    "grad_clip": 1.0,
+    "tokens": "5B"
+  }
+}
