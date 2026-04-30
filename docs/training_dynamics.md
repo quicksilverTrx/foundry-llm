@@ -125,7 +125,7 @@ AdamW achieves **14% more loss reduction** over the same token budget on this ar
 |------|--------|----------|-------|
 | 500 | 262M | 4.430 | |
 | 1000 | 524M | 3.897 | |
-| 1500 | 786M | 3.714 | matches probe N2 (+0.001 Δ — consistent ✓) |
+| 1500 | 786M | 3.714 | matches probe N2 (+0.001 Δ — consistent ) |
 | 2000 | 1.05B | 3.610 | |
 | 3000 | 1.57B | 3.480 | |
 | 4000 | 2.10B | 3.401 | |
@@ -180,7 +180,7 @@ Production run uses Muon (decision predated Phase 2A). RTX 4090, bfloat16, ~25,7
 | 7000 | 3.67B | ~3.67B | 3.520 | benchmark checkpoint |
 | 9000 | 4.72B | ~4.72B | 3.470 | |
 | 11500 | 6.03B | ~6.03B | 3.414 | |
-| 12000 | 6.29B | ~6.29B | 3.434 | ⚠️ blip (+0.020, recovered by step 12500) |
+| 12000 | 6.29B | ~6.29B | 3.434 | blip (+0.020, recovered by step 12500) |
 | 14000 | 7.34B | ~7.34B | 3.378 | |
 | **16000** | **8.39B** | **~7.95B** | **3.3566** | **matches v1 exactly** |
 

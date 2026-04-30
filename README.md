@@ -439,7 +439,7 @@ The serving layer is tokenizer-agnostic and supports two model formats:
 ```bash
 # Start the server
 python scripts/serving/serve.py \
-  --package experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt \
+  --package <path/to/nanollama_checkpoint.pt> \
   --loader nanollama --device cpu --dtype fp32
 
 # Sync generation
@@ -466,7 +466,7 @@ from llm_lab.core.package.nanollama_loader import load_nanollama_checkpoint
 from llm_lab.serving.engine import Engine
 
 cfg, tokenizer, model = load_nanollama_checkpoint(
-    "experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt",
+    "<path/to/nanollama_checkpoint.pt>",
     device="cpu",
 )
 engine = Engine(model=model, tokenizer=tokenizer,

@@ -138,18 +138,18 @@ step = trainer.load_checkpoint(path)     # resume — returns step number
 | Feature | ShardTrainer | Trainer (existing) |
 |---------|-------------|-------------------|
 | Data source | ShardLoader (.npy) | DataLoader (any Dataset) |
-| bf16 autocast | ✅ CUDA-only (fp32 on cpu/mps) | ✅ CUDA-only |
-| Gradient accumulation | ✅ | ✅ |
-| Cosine LR + warmup | ✅ cosine_with_warmup | ✅ _lr_for_step |
-| Val eval with reset | ✅ val_loader.reset() | ✅ eval_every_n_steps |
-| Checkpoint save | ✅ includes config dict | ✅ no config dict |
-| Checkpoint resume | ✅ load_checkpoint() | ✅ load_checkpoint() |
-| Fused AdamW | ✅ CUDA-only (post bug-fix) | ✅ CUDA-only (post bug-fix) |
-| Grad clip | ✅ | ✅ |
-| Trajectory CSV | ✅ NanoLlama 8L column layout | ✅ different layout |
-| Step-based (not epoch) | ✅ | Epoch-based (max_steps supported) |
-| Slim checkpoint export | ✅ save_model_only() | ❌ |
-| Model config in checkpoint | ✅ | ❌ |
+| bf16 autocast | CUDA-only (fp32 on cpu/mps) | CUDA-only |
+| Gradient accumulation | Done | Done |
+| Cosine LR + warmup | cosine_with_warmup | _lr_for_step |
+| Val eval with reset | val_loader.reset() | eval_every_n_steps |
+| Checkpoint save | includes config dict | no config dict |
+| Checkpoint resume | load_checkpoint() | load_checkpoint() |
+| Fused AdamW | CUDA-only (post bug-fix) | CUDA-only (post bug-fix) |
+| Grad clip | Done | Done |
+| Trajectory CSV | NanoLlama 8L column layout | different layout |
+| Step-based (not epoch) | Done | Epoch-based (max_steps supported) |
+| Slim checkpoint export | save_model_only() | No |
+| Model config in checkpoint | Done | No |
 
 **What ShardTrainer does NOT reinvent:**
 - Optimizer construction → delegates to `build_adamw_with_decay_groups` (existing)
@@ -231,7 +231,7 @@ Pre-existing 65 tests pass after `optim.py` bug fix. No regressions introduced.
 
 ---
 
-### Test 1 — Sanity Check ✅
+### Test 1 — Sanity Check
 
 ```
 Checkpoint step  : 4768
@@ -318,12 +318,12 @@ The model transitions from deterministic loops (temp≤0.4) to zero-rep creative
 
 | Text | Loss | PPL | Note |
 |------|------|-----|------|
-| wiki_gravity | 2.957 | **19.2** | ← low ✅ |
-| wiki_python | 3.029 | **20.7** | ← low ✅ |
+| wiki_gravity | 2.957 | **19.2** | (low) Done |
+| wiki_python | 3.029 | **20.7** | (low) Done |
 | numbers (1–25) | 2.322 | **10.2** | Strong numerical pattern learning |
 | code_snippet (numpy) | 2.436 | **11.4** | Strong code competence |
 | dialogue | 3.123 | 22.7 | Reasonable |
-| random_junk | 6.867 | 960 | ← high ✅ |
+| random_junk | 6.867 | 960 | (high) Done |
 | repetitive ("the"×20) | 7.461 | **1738** | Surprising: model does NOT predict "the" loops |
 
 **Notable insight on repetitive text:** PPL=1738 on "the the the the..." means the model assigns very low probability to repetitive token sequences even though it *generates* them under greedy decoding. This reveals an important asymmetry: greedy mode exploits the highest single-step probability token (which at any given context may be "the"), but the *sequence* "the the the..." as a whole is assigned low joint probability. The repetition bug is a decoding artifact, not a model belief.
@@ -359,14 +359,14 @@ Max possible: log2(50304) = 15.62 bits.
 
 | Prompt | Response | Score |
 |--------|----------|-------|
-| Capital of Japan | "Kashi" | ❌ (Tokyo) |
-| 7 × 8 = ? | "3!4, 3!4..." (garbled) | ❌ |
-| Hot opposite of | "a cold" | ✅ (almost) |
-| Dog, cat, bird are... | "animal behavior" | ✅ (semantically correct) |
-| Monday→Thursday... | repeats "Saturday" | ❌ (partial) |
-| Python reverse_string | Incomplete function body | ⚠️ partial |
-| Photosynthesis | "process by which plants use energy from light" | ✅ correct |
-| Einstein born in | "Dijon" (then non-sequitur) | ❌ (Ulm) |
+| Capital of Japan | "Kashi" | No (Tokyo) |
+| 7 × 8 = ? | "3!4, 3!4..." (garbled) | No |
+| Hot opposite of | "a cold" |  (almost) |
+| Dog, cat, bird are... | "animal behavior" |  (semantically correct) |
+| Monday→Thursday... | repeats "Saturday" | No (partial) |
+| Python reverse_string | Incomplete function body | partial |
+| Photosynthesis | "process by which plants use energy from light" |  correct |
+| Einstein born in | "Dijon" (then non-sequitur) | No (Ulm) |
 
 **Assessment:** 2 correct, 4 wrong, 2 partial out of 8. This is below what a well-tuned model should achieve but consistent with a pure pretrain on educational text with no instruction tuning. The model has latent factual knowledge (photosynthesis is correct, animal categories are correct) but factual recall is unreliable under sampling.
 
@@ -459,7 +459,7 @@ NanoLlama v2 eval suite (temperature sweep, perplexity profiling, entropy analys
 
 ### 4.2 SwiftLlama-350M benchmark scores (step 7,000, 3.67B tokens)
 
-These are **milestone benchmarks at 54% of Chinchilla-optimal**, not the valid architectural comparison point. NanoLlama v1 at this point had seen 19.6× tokens/param vs SwiftLlama's 10.5×. The valid comparison is at Chinchilla-optimal (~step 13,000) — pending.
+These are **milestone benchmarks at 54% of Chinchilla-optimal**, not the valid architectural comparison point. NanoLlama v1 at this point had seen 19.6× tokens/param vs SwiftLlama's 10.5×. The valid comparison is at Chinchilla-optimal (~step 13,000) — not yet run at time of writing.
 
 | Task | Random baseline | SwiftLlama-350M | NanoLlama v1 (2.5B tok) |
 |------|----------------|----------------|-------------------------|
@@ -481,12 +481,12 @@ The 11-test suite above (temperature sweep, nucleus sampling, repetition analysi
 
 | Component | Module | Status |
 |-----------|--------|--------|
-| ShardLoader (.npy) | `llm_lab/core/data/shard_loader.py` | ✅ Done |
-| ShardIterableDataset | Included in shard_loader.py | ✅ Done |
-| LR schedule | `llm_lab/core/train/lr_schedule.py` | ✅ Done |
-| ShardTrainer + config | `llm_lab/core/train/shard_trainer.py` | ✅ Done |
-| Checkpoint save/resume | `ShardTrainer.save_checkpoint/load_checkpoint` | ✅ Done |
-| fused AdamW (CPU/MPS safe) | `llm_lab/core/train/optim.py` | ✅ Done |
-| Unit tests | 29 tests passing | ✅ Done |
+| ShardLoader (.npy) | `llm_lab/core/data/shard_loader.py` | Done |
+| ShardIterableDataset | Included in shard_loader.py | Done |
+| LR schedule | `llm_lab/core/train/lr_schedule.py` | Done |
+| ShardTrainer + config | `llm_lab/core/train/shard_trainer.py` | Done |
+| Checkpoint save/resume | `ShardTrainer.save_checkpoint/load_checkpoint` | Done |
+| fused AdamW (CPU/MPS safe) | `llm_lab/core/train/optim.py` | Done |
+| Unit tests | 29 tests passing | Done |
 
 **Note:** `Trainer` expects `DataLoader`, not `ShardLoader` directly. The `ShardIterableDataset` bridge exists for use with the existing `Trainer`. `ShardTrainer` is the preferred path for shard-based pretraining.

@@ -89,7 +89,7 @@ The estimated cost of AdamW's advantage compounding from step 4000 to step 28,61
 
 | Point in time | Decision | Reasoning | Outcome |
 |--------------|---------|-----------|---------|
-| v2 launch | AdamW | N1/N2/N3 probes: AdamW +0.491 nats at 127M | Val 3.2210 at 4.72B ✓ |
+| v2 launch | AdamW | N1/N2/N3 probes: AdamW +0.491 nats at 127M | Val 3.2210 at 4.72B |
 | SwiftLlama launch | Muon | 5× efficiency claim from speedrunning; test-at-scale strategy | Continued on Muon after Phase 2A |
 | Phase 2A (step 1500) | Confirmed AdamW wins by 0.190 nats | A3 reaches A1's loss 33% faster | Production run continues on Muon (checkpoint continuity) |
 | All future models | AdamW | Muon does not transfer to GQA+SwiGLU | — |

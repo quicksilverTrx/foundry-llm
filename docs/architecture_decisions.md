@@ -15,7 +15,7 @@ Eight architecture swaps were run at 345M tokens each (B=8, GA=64, T=1024, warmu
 | 0 | Baseline (MHA, GELU, LayerNorm, learned pos) | 5.0825 | — |
 | 1 | +RoPE | 4.6965 | **−0.386** |
 | 2 | +RMSNorm | 4.7127 | +0.016 (slight regression) |
-| 3 | +logit softcap=30 | 4.7997 | +0.087 ⚠️ confounded |
+| 3 | +logit softcap=30 | 4.7997 | +0.087 confounded |
 | 4 | +QK-Norm + GQA codepath | 4.7820 | −0.018 |
 | 5 | +SwiGLU d_ff=2048 | 4.6430 | **−0.139** |
 | 6 | +GQA kv=4 | 4.6383 | −0.005 |
@@ -41,9 +41,9 @@ Pre-Phase-6 fixes applied at SWAP 2→3 boundary (confirmed by param count evide
 
 | Fix | SWAPs 0–2 | SWAPs 3–7 + Phase 6 |
 |-----|-----------|---------------------|
-| lm_head.bias | Present (wrong) | Removed ✓ |
-| token_embed init std | 0.036 (1/√d_model) | 0.02 (Karpathy standard) ✓ |
-| Residual stream projection std | 0.036 / √(2n) | 0.02 / √(2n) ✓ |
+| lm_head.bias | Present (wrong) | Removed |
+| token_embed init std | 0.036 (1/√d_model) | 0.02 (Karpathy standard) |
+| Residual stream projection std | 0.036 / √(2n) | 0.02 / √(2n) |
 
 Comparisons within SWAPs 0–2 are clean; comparisons across the SWAP 2→3 boundary are confounded.
 

@@ -4,7 +4,7 @@ This is the self-contained reference document for the foundry-llm serving projec
 
 ## 0. Current state (cold-start summary)
 
-**What exists:** A complete serving layer (`llm_lab/serving/`, 17 files, ~2,200 LOC) and eval stack (`llm_lab/eval/`, 5 files, ~1,300 LOC) on top of the foundry-llm core transformer. All code is on the local `main` branch; commits are being staged in logical groups.
+**What exists:** A complete serving layer (`llm_lab/serving/`, 17 files, ~2,200 LOC) and eval stack (`llm_lab/eval/`, 5 files, ~1,300 LOC) on top of the foundry-llm core transformer.
 
 **What it can do right now:**
 ```bash
@@ -685,7 +685,7 @@ Both `SubwordTokenizer` (sp16k) and `TiktokenWrapper` (GPT-2) satisfy this inter
 
 ## 12. Repo organization
 
-All internal project numbering (`p3_`, `project3_`, `phase0`–`phase5`) was scrubbed and replaced with descriptive names. Scripts organized into `scripts/{core, serving, eval, data, research, pretrain}/` subdirectories.
+Scripts are organized into `scripts/{core, serving, eval, data, research, pretrain}/` subdirectories.
 
 ---
 

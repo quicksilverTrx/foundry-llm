@@ -7,20 +7,20 @@ All quantitative results across NanoLlama v1 (ablation + full run), NanoLlama v2
 ## Architecture ablation (Phase 5, NanoLlama v1 path)
 
 8-swap progressive ablation. Each swap: B=8, GA=64, T=1024 (524,288 tok/step), warmup=50, max_steps=500.  
-Swap 0 baseline: 163.16M params (untied weights; internal reference only, not comparable to GPT-2 124M).
+Swap 0 baseline: 163.16M params (untied weights, separate lm_head; not directly comparable to GPT-2 124M due to different weight tying convention).
 
 | Swap | Feature | Params (M) | val@500 | Δ incremental | Δ cumulative | Valid? |
 |------|---------|-----------|---------|---------------|-------------|--------|
 | 0 | GPT-2 baseline (MHA, GELU, LayerNorm, learned pos) | 163.16 | 5.0825 | — | — | Internal ref |
-| 1 | +RoPE | 162.37 | 4.6965 | **−0.3860** | −0.3860 | ✓ |
-| 2 | +RMSNorm | 162.35 | 4.7127 | +0.0162 | −0.3698 | ✓ |
-| 3 | +logit softcap=30 | 162.30 | 4.7997 | +0.0870 | −0.2828 | ⚠️ confounded |
-| 4 | +QK-Norm + GQA path | 162.31 | 4.7820 | −0.0177 | −0.3005 | ✓ |
-| 5 | +SwiGLU d_ff=2048 | 162.26 | 4.6430 | **−0.1390** | −0.4395 | ✓ |
-| 6 | +GQA kv=4 | 152.81 | 4.6383 | −0.0047 | −0.4442 | ✓ |
-| 7 | 8L NanoLlama shape | 127.63 | 4.6918 | +0.0535 | −0.3907 | ✓ |
+| 1 | +RoPE | 162.37 | 4.6965 | **−0.3860** | −0.3860 | valid |
+| 2 | +RMSNorm | 162.35 | 4.7127 | +0.0162 | −0.3698 | valid |
+| 3 | +logit softcap=30 | 162.30 | 4.7997 | +0.0870 | −0.2828 | confounded |
+| 4 | +QK-Norm + GQA path | 162.31 | 4.7820 | −0.0177 | −0.3005 | valid |
+| 5 | +SwiGLU d_ff=2048 | 162.26 | 4.6430 | **−0.1390** | −0.4395 | valid |
+| 6 | +GQA kv=4 | 152.81 | 4.6383 | −0.0047 | −0.4442 | valid |
+| 7 | 8L NanoLlama shape | 127.63 | 4.6918 | +0.0535 | −0.3907 | valid |
 
-⚠️ Swap 3 applies three simultaneous changes: logit_softcap=30 (intended) + lm_head.bias removed + token_embed std 0.036→0.02. Incremental delta is not interpretable as softcap-only.
+Note: Swap 3 applies three simultaneous changes: logit_softcap=30 (intended) + lm_head.bias removed + token_embed std 0.036→0.02. Incremental delta is not interpretable as softcap-only.
 
 ---
 
@@ -91,7 +91,7 @@ N2 wins. AdamW leads Muon by **0.491 nats** on v2 architecture; by **0.286 nats*
 |------|--------|----------|-------|
 | 500 | 262M | 4.430 | — |
 | 1000 | 524M | 3.897 | — |
-| 1500 | 786M | 3.714 | matches probe N2 (+0.001) ✓ |
+| 1500 | 786M | 3.714 | matches probe N2 (+0.001) fixed |
 | 2000 | 1.05B | 3.610 | — |
 | 3000 | 1.57B | 3.480 | — |
 | 4000 | 2.10B | 3.401 | — |
