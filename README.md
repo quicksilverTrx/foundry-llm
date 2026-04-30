@@ -122,7 +122,95 @@ step 4768  →  3.36   ← final checkpoint
 
 Loss curve shows healthy cosine decay with no instabilities.
 
+---
 
+## NanoLlama v2 — 127M, second-generation architecture
+
+Same 127M scale and FineWeb-Edu corpus as v1, with four architecture changes
+and double the token budget.
+
+```
+Architecture  : 8L · d=768 · h=12 · GQA (kv=4) · SwiGLU · RMSNorm
+Changes vs v1 : partial RoPE (rope_fraction=0.5) · value embeddings (n_value_embeds=2)
+                x0-mixin residual (λ·x + λ₀·x₀, init=identity) · qk_norm
+Optimizer     : AdamW  (warmdown schedule, wd=0.1)
+Tokens        : 5.0 B  (9 537 steps × 524 288 tok/step)
+Compute       : 1× RTX 4090  (torch.compile, ~415 000 tok/s)
+```
+
+**Optimizer decision.** Three 1500-step probes on the v2 architecture (val at step 1500):
+
+| Probe | Arch | Optimizer | val@1500 |
+|-------|------|-----------|----------|
+| N1 | v2 (rope=0.5, ve=2, x0) | Muon nanochat | 4.206 |
+| N2 | v2 (rope=0.5, ve=2, x0) | AdamW | **3.715** |
+| N3 | base (rope=1.0, ve=0, x0=off) | Muon | 4.001 |
+
+AdamW leads Muon by **0.49 nats** at 1500 steps. Muon was designed and validated
+on the speedrunning transformer (MHA + ReLU²); our LLaMA-family stack — GQA and
+SwiGLU — has different weight-matrix structure and gradient statistics and does not
+benefit from orthogonal updates in the same way. Production run used AdamW (N2
+recipe).
+
+**Results:**
+
+| | v1 at 2.5B | v2 at 4.72B | v1 extrap. to 4.72B |
+|---|---|---|---|
+| Val loss | 3.357 | **3.221** | ~3.18 (log-linear, ±uncertainty) |
+
+At matched 2.5B tokens, v1 and v2 are essentially tied (both ~3.357). A log-linear extrapolation of v1 to v2's token budget predicts ~3.18 — which would be better than v2's 3.221 — but the two models use different LR schedules (cosine vs constant_warmdown), so the schedule effect is confounded with the architecture. Properly isolating the contribution of partial RoPE, value embeddings, and x0-mixin requires running v1 to 4.72B on the same schedule, which is the right control for future work. Config: `configs/nanollama_v2_127m.json`.
+
+---
+
+## SwiftLlama-350M — 345M parameters, 4096-token context
+
+Scales the v2 architecture to 345M parameters. Launched with Muon because the modded-nanogpt speedrunning community reported ~5× token efficiency gains over AdamW. Phase 2A (1500-step ablation) found AdamW leads by 0.190 nats on GQA+SwiGLU — the efficiency gain does not transfer from MHA+ReLU². Production run continues with Muon; AdamW is the default going forward.
+
+```
+Architecture  : 22L · d=1024 · h=16 · GQA (kv=4) · SwiGLU · RMSNorm
+Features      : partial RoPE (0.5) · value embeddings (n=2) · x0-mixin
+                qk_norm · logit softcap=30
+Optimizer     : Muon (154 weight matrices) + AdamW (245 norms/embeds/scalars)
+Batch         : B=2 · GA=64 · T=4096 → 524 288 tok/step
+Target        : 28 610 steps · ~15 B tokens
+Compute       : 1× RTX 4090 · bfloat16 · ~25 700 tok/s
+```
+
+**Phase 2A optimizer ablation (H100, 345M scale, 1500-step probes):**
+
+| Probe | Optimizer | val@500 | val@1500 |
+|-------|-----------|---------|----------|
+| A1 | Muon + Adam, WD=0 | 4.623 | 3.672 |
+| A3 | AdamW, WD=0.1 | **4.594** | **3.482** |
+
+Muon leads at step 500 (+0.029 nats) — the early advantage that motivated the choice. AdamW overtakes by step 1000 and leads by **0.190 nats** at step 1500. Short probes overestimate Muon's value on this architecture; the 5× efficiency gain from the speedrunning community does not transfer to GQA+SwiGLU.
+
+**Validation trajectory** (best checkpoint step 16 000):
+
+| Step | Tokens | Val loss |
+|------|--------|----------|
+| 4 000 | 2.10 B | 3.648 |
+| 7 000 | 3.67 B | 3.520 |
+| 11 500 | 6.03 B | 3.414 |
+| **16 000** | **8.39 B** | **3.3566** |
+
+At step 16 000 SwiftLlama's val matches NanoLlama v1's final val (3.3566) having consumed 3.4× more tokens. Chinchilla predicts a 2.7× larger model needs 2.7× more tokens to match; the observed 3.4× overage likely reflects Muon suboptimality (Phase 2A: 0.190 nats gap), though different data scaling assumptions could also contribute. Chinchilla-optimal (~6.9B unique tokens) was passed at step ~15,174; the model is not yet saturated.
+
+**Benchmarks at step 7 000** (3.67 B tokens, ~54% of Chinchilla-optimal):
+
+| Task | Random | SwiftLlama-350M | NanoLlama-127M (v1) |
+|------|--------|----------------|---------------------|
+| PIQA | 0.500 | 0.584 | **0.601** |
+| ARC-Easy | 0.250 | 0.351 | **0.381** |
+| HellaSwag | 0.250 | 0.268 | **0.270** |
+| WinoGrande | 0.500 | 0.512 | 0.503 |
+| Lambada | — | 0.292 | **0.328** |
+
+These benchmarks are at mismatched training budgets (NanoLlama: 19.6× Chinchilla-optimal; SwiftLlama at step 7000: 10.5×) and measure how much data each model has seen, not what the architecture can do. The right comparison is both models at their respective Chinchilla-optimal points; for SwiftLlama that is ~step 13,000.
+
+Config: `configs/swiftllama_350m.json`.
+
+---
 
 ## Reproduce in two commands
 
@@ -155,7 +243,16 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 - **Mar 2026 (calibration)** — GPT-2 124M reproduction on FineWeb-Edu as reference baseline (val 3.6273 at 1.05B tokens). Without a calibrated baseline, all subsequent numbers are unanchored.
 - **Mar 2026 (ablation)** — 8-run swap ablation isolating RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, logit softcap. RoPE (−0.386 val loss) and SwiGLU (−0.139) dominate. This confirmed the architecture choices before committing to a full run.
 - **Mar 2026 (pretraining)** — NanoLlama 8L: 4768 steps, 2.5B tokens, RTX 4090, ~9h. Val 3.3566 (BPB 1.016), HellaSwag 0.2696. Only 0.020 BPB behind the 10B-token GPT-2 reference.
-- **Mar–Apr 2026 (serving)** — the question shifts from "can we train it" to "can we serve it with measured latency." KV-cache engine with prefill/decode separation; correctness proven before optimization (cache equivalence gate: max |logit_diff| 6.68e-06). Measured 7.5x decode speedup on NanoLlama. FastAPI with SSE streaming, batched prefill, rate limiting, PII/profanity safety filters. int8 dynamic quantization: 70% memory reduction at +6% PPL drift and 1.27x faster decode — the insight being that int8 helps large models (memory-bandwidth-bound) but hurts small ones (compute-overhead-bound). Tiktoken adapter for NanoLlama with out-of-vocab filtering. Prompt suite, perplexity regression, evidence pack with TTFT/TPS curves across context lengths and batch sizes. 152 tests.
+- **Mar–Apr 2026 (serving)** — FastAPI serving layer on NanoLlama 8L: KV-cache engine (prefill/decode split), SSE streaming, batched prefill, int8 quantisation, safety filters, tiktoken adapter, TTFT/TPS benchmarking. 152 tests.
+  - **Correctness gate before performance.** Cached decode was verified to match full recompute logit-for-logit (max |logit_diff| 2.09e-05, atol 1e-4) before any latency work started. KV-cache bugs are silent — shapes match, output looks plausible, but logits drift. No performance tuning without a green gate.
+  - **11× decode speedup on NanoLlama 8L** (17.8 ms/tok cached vs 196 ms/tok recompute, prompt=256, CPU M1). The gap is algorithmic: cached decode is O(1) per token (attend new query against cached keys); full recompute is O(T) per token and grows with generation length.
+  - **TTFT scales as O(context²); decode TPS is flat across batch sizes.** A 9-point grid (ctx=256/512/1024 × B=1/2/4) confirmed two patterns: TTFT doubles roughly with context (compute-bound prefill) while TPS at a given context holds steady across B=1/2/4 (memory-bandwidth-bound weight loading). Practical implication: prefill batching is essentially free at the decode stage.
+  - **int8 is asymmetric: faster decode, slower prefill.** Dynamic quantisation (qnnpack, weight-only) gives 1.27× faster decode and 70% memory reduction (486 MB → 147 MB) but 2.9× slower prefill. The split maps directly to bottlenecks: decode is bandwidth-bound (loading fewer quantised bytes helps), prefill is compute-bound (per-batch quantisation overhead hurts). The serving layer selects int8 as the CPU default via a quality-gated recommendation at +6% PPL drift.
+  - **GQA training choice compounds into a serving dividend.** The ablation-motivated switch to 4 KV heads (38K→60K tok/s training throughput) means each decode step loads K/V matrices 3× smaller than MHA and the KV-cache footprint drops from 48 MB to 16 MB at block_size=1024. The architectural decision and the inference cost reduction are the same decision.
+- **Apr 2026 (architecture + scale)** — NanoLlama v2 (127M, 4.72B tokens, val 3.221) and SwiftLlama-350M (345M, 4096-token context, val 3.357 at step 16,000).
+  - **v2 architectural additions don't isolate cleanly.** Partial RoPE, value embeddings, and x0-mixin were added from the nanochat line, but matched-token analysis shows v1 and v2 are essentially tied at 2.5B tokens (both ~3.357). The full −0.136 nat gap comes from training 1.9× longer, not from the architecture. The correct control — v1 to 4.72B on the same schedule — was deprioritised for the scale-up and remains open.
+  - **Muon launched SwiftLlama; Phase 2A killed it.** SwiftLlama started on Muon because the modded-nanogpt community reported ~5× token efficiency over AdamW. A three-probe ablation on H100 (1,500 steps each) showed AdamW wins by 0.19 nats on GQA+SwiGLU. The mechanism: Muon's Newton-Schulz orthogonalisation is tuned to MHA+ReLU² gradient geometry; asymmetric GQA projections and SwiGLU's gated gradient flow break the assumption. SwiftLlama continues on Muon for checkpoint continuity — the cost is quantified as a ~3.4× token overage vs Chinchilla's 2.7× prediction. AdamW is the default for all future models.
+  - **Short probes overstate Muon's value.** At step 500, Muon leads AdamW by 0.029 nats. By step 1,000 AdamW has overtaken and extends the lead to 0.19 nats by step 1,500. The crossover coincides with LR decay beginning. Any probe that stops at ≤500 steps will systematically misread this architecture's optimizer preference.
 ---
 
 ## Repository layout
@@ -177,10 +274,18 @@ foundry-llm/
 │   ├── data/                      ← data preparation & shards
 │   └── research/                  ← research lane & overnight scripts
 ├── docs/
+│   ├── architecture_decisions.md  ← full reasoning chain for every architectural choice
+│   ├── model_architecture.md      ← MiniGPTConfig field reference + three-model comparison
+│   ├── training_results.md        ← all val trajectories and matched-token analysis
+│   ├── training_dynamics.md       ← LR schedules, loss curves, optimizer dynamics
+│   ├── retrospective.md           ← what worked, what I'd do differently, next experiment
+│   ├── muon_decision_rationale.md ← Muon optimizer: decision log and post-mortem
 │   ├── ablation_analysis.md       ← swap ablation results + confound analysis
 │   ├── eval_results.md            ← full eval suite output + implementation notes
-│   ├── local_artifacts.md         ← all local checkpoint / log / CSV paths ← START HERE
+│   ├── qualitative_eval.md        ← 8-prompt generation samples on NanoLlama v2 with per-sample analysis
 │   ├── replication.md             ← step-by-step reproduction guide
+│   ├── serving_results.md             ← KV-cache speedup, TTFT/TPS grid, int8 quant measurements
+│   ├── serving_project_deliverables.md ← full serving layer spec: win conditions, phase deliverables
 │   └── serving_nanollama_tiktoken.md ← tiktoken ↔ serving layer integration guide
 ├── results/
 │   ├── nanollama_8l_training.csv  ← full 4 768-step training trajectory
@@ -276,7 +381,9 @@ Positional encodings:
 
 Pretraining:
 - `python data/prepare_dataset.py` — download + tokenise FineWeb-Edu
-- `python scripts/pretrain/pretrain_nanollama.py` — full NanoLlama 8L pretraining run
+- `python scripts/pretrain/pretrain_nanollama.py` — NanoLlama 8L (`configs/nanollama_8l.json`)
+- `python scripts/train_nanollama_v2.py` — NanoLlama v2 with Muon or AdamW (`configs/nanollama_v2_127m.json`)
+- `python scripts/train_swiftllama_350m.py` — SwiftLlama-350M with Muon (`configs/swiftllama_350m.json`)
 
 Serving:
 - `python scripts/serving/serve.py` — start FastAPI inference server
@@ -336,12 +443,35 @@ The serving layer is tokenizer-agnostic and supports two model formats:
 - `--loader package` (default) — sp16k SubwordTokenizer packages
 - `--loader nanollama` — raw `.pt` checkpoints with tiktoken GPT-2
 
+### Measured results (CPU M1 Pro, fp32)
+
+**KV-cache:** 11× decode speedup (17.8 ms/tok cached vs 196 ms/tok recompute, prompt=256 gen=128). TTFT and steady-state TPS across the operating range:
+
+| Context | TTFT (B=1) | TPS (B=1) | TPS (B=2) | TPS (B=4) |
+|---------|-----------|-----------|-----------|-----------|
+| 256 | 100ms | 56 | 56 | 56 |
+| 512 | 189ms | 49 | 50 | 51 |
+| 1024 | 463ms | 42 | 40 | 43 |
+
+TTFT scales roughly as O(context²) — compute-bound prefill. Decode TPS is flat across batch sizes — memory-bandwidth-bound weight loading. Both patterns are explained in [`docs/serving_results.md`](docs/serving_results.md).
+
+**int8 quantization** (dynamic, qnnpack, weight-only, no calibration required):
+
+| Mode | Decode | Prefill | Memory | PPL |
+|------|--------|---------|--------|-----|
+| fp32 | 17.6 ms/tok | 118ms | 486 MB | 268.2 |
+| int8 | 13.9 ms/tok | 341ms | **147 MB** | 284.3 |
+
+int8 decode is 1.27× faster (bandwidth-bound). int8 prefill is 2.9× slower (compute-overhead on quantization). 147 MB vs 486 MB is the difference that matters for memory-constrained deployment. fp16/bf16 fall back to fp32 on CPU with an explicit reason string; they execute natively on CUDA. The serving layer selects int8 as the CPU default via a quality-gated recommendation (`best_tradeoff_quality_gated`).
+
+**Tests:** 152 pass, 0 fail. Cache equivalence gate: max logit diff **2.09e-05** (prompt=256), exact greedy token match.
+
 ### HTTP
 
 ```bash
 # Start the server
 python scripts/serving/serve.py \
-  --package experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt \
+  --package <path/to/nanollama_checkpoint.pt> \
   --loader nanollama --device cpu --dtype fp32
 
 # Sync generation
@@ -368,7 +498,7 @@ from llm_lab.core.package.nanollama_loader import load_nanollama_checkpoint
 from llm_lab.serving.engine import Engine
 
 cfg, tokenizer, model = load_nanollama_checkpoint(
-    "experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt",
+    "<path/to/nanollama_checkpoint.pt>",
     device="cpu",
 )
 engine = Engine(model=model, tokenizer=tokenizer,

@@ -25,8 +25,10 @@ class TransformerBlockConfig:
     num_kv_heads: Optional[int] = None
     rope_scaling_type: Literal["none", "linear"] = "none"
     rope_scaling_factor: float = 1.0
+    rope_fraction: float = 1.0   # passed through to MultiHeadAttentionConfig
     use_sdpa: bool = False   # passed through to MultiHeadAttentionConfig
     qk_norm: bool = False    # passed through to MultiHeadAttentionConfig
+    n_value_embeds: int = 0  # passed through to MultiHeadAttentionConfig
 
 
 class TransformerBlock(nn.Module):
@@ -44,12 +46,14 @@ class TransformerBlock(nn.Module):
                                                     n_heads=config.n_heads,
                                                     dropout=config.dropout,
                                                     use_rope=config.use_rope,
-                                                    attention_type = config.attention_type,
-                                                    num_kv_heads = config.num_kv_heads,
+                                                    attention_type=config.attention_type,
+                                                    num_kv_heads=config.num_kv_heads,
                                                     rope_scaling_type=config.rope_scaling_type,
                                                     rope_scaling_factor=config.rope_scaling_factor,
+                                                    rope_fraction=config.rope_fraction,
                                                     use_sdpa=config.use_sdpa,
-                                                    qk_norm=config.qk_norm)
+                                                    qk_norm=config.qk_norm,
+                                                    n_value_embeds=config.n_value_embeds)
         self.attn = MultiHeadAttention(attention_config)
 
         #FF Layer

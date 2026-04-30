@@ -23,7 +23,7 @@ class MiniGPTConfig:
     dropout: float = 0.0
 
     norm_type: Literal["layernorm", "rmsnorm"] = "layernorm"
-    mlp_type: Literal["gelu", "swiglu"] = "gelu"
+    mlp_type: Literal["gelu", "swiglu", "relu_squared"] = "gelu"
     attention_type: Literal["mha", "gqa"] = "mha"
     num_kv_heads: Optional[int] = None
 

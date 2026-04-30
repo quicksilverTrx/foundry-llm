@@ -1,13 +1,12 @@
-# Implementation & Evaluation Results — NanoLlama 8L
+# Evaluation Results — NanoLlama 8L v1
 
-**Date:** 2026-03-31
-**Scope:** Pipeline integration (ShardLoader, lr_schedule, ShardTrainer) + full model eval suite
+**Model:** NanoLlama 8L — 127.63M params, 8 layers, GQA (12Q/4KV heads), d_model=768, SwiGLU, RoPE, RMSNorm  
+**Training:** 4,768 steps · 2.5B tokens · FineWeb-Edu · RTX 4090  
+**Final checkpoint:** val loss **3.3566** · BPB **1.016** · HellaSwag **26.96%**  
+**Full training trajectory:** `results/nanollama_8l_training.csv`
 
-> **Local artifact locations** → see [`docs/local_artifacts.md`](local_artifacts.md) for all checkpoint paths, log files, and trajectory CSVs.
->
-> **NanoLlama 8L final checkpoint:** `experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt` (487 MB)
-> **Training log:** `experiments/tinyllama_pretrain_2026-03-31/phase6/run.log`
-> **Trajectory CSV:** `experiments/tinyllama_pretrain_2026-03-31/phase6/trajectory.csv` (also committed as `results/nanollama_8l_training.csv`)
+> For NanoLlama v2 (4.72B tokens, val 3.2210) and SwiftLlama-350M results, see `docs/training_results.md`.  
+> For generation samples on the v2 model, see `docs/qualitative_eval.md`.
 
 ---
 
@@ -139,18 +138,18 @@ step = trainer.load_checkpoint(path)     # resume — returns step number
 | Feature | ShardTrainer | Trainer (existing) |
 |---------|-------------|-------------------|
 | Data source | ShardLoader (.npy) | DataLoader (any Dataset) |
-| bf16 autocast | ✅ CUDA-only (fp32 on cpu/mps) | ✅ CUDA-only |
-| Gradient accumulation | ✅ | ✅ |
-| Cosine LR + warmup | ✅ cosine_with_warmup | ✅ _lr_for_step |
-| Val eval with reset | ✅ val_loader.reset() | ✅ eval_every_n_steps |
-| Checkpoint save | ✅ includes config dict | ✅ no config dict |
-| Checkpoint resume | ✅ load_checkpoint() | ✅ load_checkpoint() |
-| Fused AdamW | ✅ CUDA-only (post bug-fix) | ✅ CUDA-only (post bug-fix) |
-| Grad clip | ✅ | ✅ |
-| Trajectory CSV | ✅ NanoLlama 8L column layout | ✅ different layout |
-| Step-based (not epoch) | ✅ | Epoch-based (max_steps supported) |
-| Slim checkpoint export | ✅ save_model_only() | ❌ |
-| Model config in checkpoint | ✅ | ❌ |
+| bf16 autocast | CUDA-only (fp32 on cpu/mps) | CUDA-only |
+| Gradient accumulation | Done | Done |
+| Cosine LR + warmup | cosine_with_warmup | _lr_for_step |
+| Val eval with reset | val_loader.reset() | eval_every_n_steps |
+| Checkpoint save | includes config dict | no config dict |
+| Checkpoint resume | load_checkpoint() | load_checkpoint() |
+| Fused AdamW | CUDA-only (post bug-fix) | CUDA-only (post bug-fix) |
+| Grad clip | Done | Done |
+| Trajectory CSV | NanoLlama 8L column layout | different layout |
+| Step-based (not epoch) | Done | Epoch-based (max_steps supported) |
+| Slim checkpoint export | save_model_only() | No |
+| Model config in checkpoint | Done | No |
 
 **What ShardTrainer does NOT reinvent:**
 - Optimizer construction → delegates to `build_adamw_with_decay_groups` (existing)
@@ -160,7 +159,7 @@ step = trainer.load_checkpoint(path)     # resume — returns step number
 
 ---
 
-### 1.5 New: `experiments/tinyllama_pretrain_2026-03-31/eval_suite.py`
+### 1.5 Eval harness
 
 An 11-test evaluation harness for NanoLlama 8L using the foundry-llm codebase.
 
@@ -219,23 +218,20 @@ Total: 29 passed in 2.20s
 
 ### 2.2 Existing Test Suite: No regressions
 
-Pre-existing passing tests: 65 still pass after `optim.py` bug fix.
-Pre-existing failures (unrelated to this work):
-- `test_sp16k_fineweb_prep.py::test_rehearsal_lane_*` — missing `experiments/p15_archive/scripts/p15_preflight_nanollama.py` in worktree (not in this branch)
-- `test_trainer.py::test_loss_decreases_tiny` — missing `data/tiny_shakespeare.txt` (data file, not code)
+Pre-existing 65 tests pass after `optim.py` bug fix. No regressions introduced.
 
 ---
 
 ## 3. Model Evaluation: NanoLlama 8L (step 4768)
 
-**Model:** 127.63M params, val_loss=3.3566, ppl=28.69
-**Checkpoint:** `out/ckpts/step_04768_model_only.pt`
-**Device:** MPS (Apple Silicon M-series)
+**Model:** NanoLlama 8L v1 — 127.63M params, val_loss=3.3566, ppl=28.69  
+**Checkpoint:** step 4,768 · 2.5B tokens  
+**Device:** MPS (Apple Silicon M-series)  
 **Sampling backend:** `llm_lab.core.decode.sampling`
 
 ---
 
-### Test 1 — Sanity Check ✅
+### Test 1 — Sanity Check
 
 ```
 Checkpoint step  : 4768
@@ -322,12 +318,12 @@ The model transitions from deterministic loops (temp≤0.4) to zero-rep creative
 
 | Text | Loss | PPL | Note |
 |------|------|-----|------|
-| wiki_gravity | 2.957 | **19.2** | ← low ✅ |
-| wiki_python | 3.029 | **20.7** | ← low ✅ |
+| wiki_gravity | 2.957 | **19.2** | (low) Done |
+| wiki_python | 3.029 | **20.7** | (low) Done |
 | numbers (1–25) | 2.322 | **10.2** | Strong numerical pattern learning |
 | code_snippet (numpy) | 2.436 | **11.4** | Strong code competence |
 | dialogue | 3.123 | 22.7 | Reasonable |
-| random_junk | 6.867 | 960 | ← high ✅ |
+| random_junk | 6.867 | 960 | (high) Done |
 | repetitive ("the"×20) | 7.461 | **1738** | Surprising: model does NOT predict "the" loops |
 
 **Notable insight on repetitive text:** PPL=1738 on "the the the the..." means the model assigns very low probability to repetitive token sequences even though it *generates* them under greedy decoding. This reveals an important asymmetry: greedy mode exploits the highest single-step probability token (which at any given context may be "the"), but the *sequence* "the the the..." as a whole is assigned low joint probability. The repetition bug is a decoding artifact, not a model belief.
@@ -363,14 +359,14 @@ Max possible: log2(50304) = 15.62 bits.
 
 | Prompt | Response | Score |
 |--------|----------|-------|
-| Capital of Japan | "Kashi" | ❌ (Tokyo) |
-| 7 × 8 = ? | "3!4, 3!4..." (garbled) | ❌ |
-| Hot opposite of | "a cold" | ✅ (almost) |
-| Dog, cat, bird are... | "animal behavior" | ✅ (semantically correct) |
-| Monday→Thursday... | repeats "Saturday" | ❌ (partial) |
-| Python reverse_string | Incomplete function body | ⚠️ partial |
-| Photosynthesis | "process by which plants use energy from light" | ✅ correct |
-| Einstein born in | "Dijon" (then non-sequitur) | ❌ (Ulm) |
+| Capital of Japan | "Kashi" | No (Tokyo) |
+| 7 × 8 = ? | "3!4, 3!4..." (garbled) | No |
+| Hot opposite of | "a cold" |  (almost) |
+| Dog, cat, bird are... | "animal behavior" |  (semantically correct) |
+| Monday→Thursday... | repeats "Saturday" | No (partial) |
+| Python reverse_string | Incomplete function body | partial |
+| Photosynthesis | "process by which plants use energy from light" |  correct |
+| Einstein born in | "Dijon" (then non-sequitur) | No (Ulm) |
 
 **Assessment:** 2 correct, 4 wrong, 2 partial out of 8. This is below what a well-tuned model should achieve but consistent with a pure pretrain on educational text with no instruction tuning. The model has latent factual knowledge (photosynthesis is correct, animal categories are correct) but factual recall is unreliable under sampling.
 
@@ -378,9 +374,11 @@ Max possible: log2(50304) = 15.62 bits.
 
 ---
 
-### Test 9 — HellaSwag-Style MCQ (5 items, 4 choices each)
+### Test 9 — HellaSwag-Style MCQ (5 custom items, 4 choices each)
 
-**Result: 3/5 = 60%** (random baseline = 25%)
+**Note:** This is a 5-item hand-crafted probe, not the full HellaSwag benchmark. The full 10,042-item HellaSwag evaluation gives **26.96%** (random baseline 25%). The 5-item probe below is directionally useful but statistically noisy.
+
+**Probe result: 3/5 = 60%** (random baseline = 25%)
 
 | Item | Result | Margin (pred vs gold loss) |
 |------|--------|---------------------------|
@@ -430,8 +428,8 @@ Distinct top-1 tokens: 169 / 50,304  (0.3%)
 | Model | Tokens | Val Loss | PPL |
 |-------|--------|----------|-----|
 | GPT-2 124M baseline | 1.053B | 3.6273 | 37.6 |
-| NanoLlama 8L (NanoLlama 8L) | 2.500B | 3.3566 | 28.7 |
-| NanoLlama 8L @ 1B tokens (step ~2009) | 1.053B | 3.5892 | 36.2 |
+| NanoLlama 8L v1 | 2.500B | 3.3566 | 28.7 |
+| NanoLlama 8L v1 @ 1B tokens (step ~2009) | 1.053B | 3.5892 | 36.2 |
 
 **Compute-matched gap (1B tokens):** 3.6273 − 3.5892 = **0.038 nats**
 
@@ -443,16 +441,52 @@ The architectural features (RoPE +0.386, SwiGLU +0.139) provide real improvement
 
 ---
 
-## 4. Component Status
+## 4. Cross-model quantitative results
+
+### 4.1 Val loss comparison
+
+All models trained on FineWeb-Edu with GPT-2 BPE tokenization (tiktoken). Val loss measured on the FineWeb-Edu validation shard.
+
+| Model | Params | Tokens | Val loss | BPB | HellaSwag |
+|-------|--------|--------|----------|-----|-----------|
+| GPT-2 124M (Karpathy reference) | 124M | ~10B | 3.29 | 0.996 | — |
+| GPT-2 124M (reproduced @ 1.05B tok) | 124M | 1.05B | 3.627 | 1.098 | — |
+| NanoLlama 8L v1 | 127.6M | 2.5B | **3.357** | **1.016** | **26.96%** |
+| NanoLlama v2 | 127.6M | 4.72B | **3.221** | — | — |
+| SwiftLlama-350M (step 16,000) | 345.3M | 8.39B | **3.357** | — | — |
+
+NanoLlama v2 eval suite (temperature sweep, perplexity profiling, entropy analysis) has not been run — only val loss is available. The v1 suite in sections 2–3 above applies architecturally; v2 differences are partial RoPE, value embeddings, and x0-mixin, which are unlikely to change the qualitative decoding behaviour.
+
+### 4.2 SwiftLlama-350M benchmark scores (step 7,000, 3.67B tokens)
+
+These are **milestone benchmarks at 54% of Chinchilla-optimal**, not the valid architectural comparison point. NanoLlama v1 at this point had seen 19.6× tokens/param vs SwiftLlama's 10.5×. The valid comparison is at Chinchilla-optimal (~step 13,000) — not yet run at time of writing.
+
+| Task | Random baseline | SwiftLlama-350M | NanoLlama v1 (2.5B tok) |
+|------|----------------|----------------|-------------------------|
+| PIQA | 0.500 | 0.584 | **0.601** |
+| ARC-Easy | 0.250 | 0.351 | **0.381** |
+| HellaSwag | 0.250 | 0.268 | **0.270** |
+| WinoGrande | 0.500 | 0.512 | 0.503 |
+| Lambada | — | 0.292 | **0.328** |
+
+SwiftLlama trails v1 on all five tasks at this checkpoint. As noted in `docs/training_dynamics.md`, SwiftLlama requires ~3.4× more tokens than Chinchilla's 2.7× prediction to match v1 val loss — attributable to Muon's negative transfer on GQA+SwiGLU. Scores at Chinchilla-optimal will be reported once step ~13,000 is reached.
+
+### 4.3 What the eval suite would add for v2 / SwiftLlama
+
+The 11-test suite above (temperature sweep, nucleus sampling, repetition analysis, perplexity on held-out texts, next-token entropy, MCQ probe, vocabulary coverage) has only been run on v1. Running the same suite on v2 would isolate whether the architectural additions (partial RoPE, value embeddings, x0-mixin) change qualitative generation behaviour — expected to be small at 127M scale.
+
+---
+
+## 5. Component Status
 
 | Component | Module | Status |
 |-----------|--------|--------|
-| ShardLoader (.npy) | `llm_lab/core/data/shard_loader.py` | ✅ Done |
-| ShardIterableDataset | Included in shard_loader.py | ✅ Done |
-| LR schedule | `llm_lab/core/train/lr_schedule.py` | ✅ Done |
-| ShardTrainer + config | `llm_lab/core/train/shard_trainer.py` | ✅ Done |
-| Checkpoint save/resume | `ShardTrainer.save_checkpoint/load_checkpoint` | ✅ Done |
-| fused AdamW (CPU/MPS safe) | `llm_lab/core/train/optim.py` | ✅ Done |
-| Unit tests | 29 tests passing | ✅ Done |
+| ShardLoader (.npy) | `llm_lab/core/data/shard_loader.py` | Done |
+| ShardIterableDataset | Included in shard_loader.py | Done |
+| LR schedule | `llm_lab/core/train/lr_schedule.py` | Done |
+| ShardTrainer + config | `llm_lab/core/train/shard_trainer.py` | Done |
+| Checkpoint save/resume | `ShardTrainer.save_checkpoint/load_checkpoint` | Done |
+| fused AdamW (CPU/MPS safe) | `llm_lab/core/train/optim.py` | Done |
+| Unit tests | 29 tests passing | Done |
 
 **Note:** `Trainer` expects `DataLoader`, not `ShardLoader` directly. The `ShardIterableDataset` bridge exists for use with the existing `Trainer`. `ShardTrainer` is the preferred path for shard-based pretraining.

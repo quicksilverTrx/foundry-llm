@@ -14,11 +14,24 @@
 # Allow specific tracked docs and results
 !README.md
 !docs/ablation_analysis.md
+!docs/architecture_decisions.md
+!docs/model_architecture.md
+!docs/training_results.md
+!docs/training_dynamics.md
+!docs/retrospective.md
+!docs/muon_decision_rationale.md
+!docs/qualitative_eval.md
+!docs/serving_nanollama_tiktoken.md
+!docs/serving_project_deliverables.md
+!docs/serving_results.md
 !docs/eval_results.md
 !docs/replication.md
 !results/nanollama_8l_training.csv
 !results/ablation_summary.csv
 !data/hellaswag_val.jsonl
+!configs/nanollama_8l.json
+!configs/nanollama_v2_127m.json
+!configs/swiftllama_350m.json
 !data/serving_eval/prompts.jsonl
 !data/serving_eval/rubric.md
 !docs/serving.md
@@ -28,3 +41,10 @@
 experiments/serving_research/raw/*
 experiments/
 experiments/tinyllama_pretrain_2026-03-31/*
+vast
+vat_api_key
+source.save
+runpod_1
+runpod_1.pub
+runpod_api_key
+nanollama_v2_127m_2026-04-15/

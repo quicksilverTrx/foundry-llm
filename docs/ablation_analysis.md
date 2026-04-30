@@ -1,8 +1,6 @@
 # Architecture Ablation — Full Re-Audit
 **Date:** 2026-03-31
 
-> Swap run logs: `experiments/tinyllama_pretrain_2026-03-31/phase5_swaps/swap{0-7}/`
-> GPT-2 baseline checkpoint: `experiments/tinyllama_pretrain_2026-03-31/phase4_baseline/ckpts/model_02009.pt`
 > Results summary: `results/ablation_summary.csv`
 
 ---
@@ -21,14 +19,14 @@ The "unintended" init changes in SWAP 3 (lm_head bias=False, token_embed std=0.0
 
 | Change | Status | Notes |
 |--------|--------|-------|
-| `logit_softcap: Optional[float]` in `MiniGPTConfig` | ✅ Correct | Gemma-style cap applied as `cap * tanh(x/cap)` post lm_head |
-| `qk_norm: bool = False` in `MiniGPTConfig` | ✅ Correct | Threaded to attention via blocks |
-| `pos_embed = None` when `pos_encoding_type="rope"` | ✅ Correct | No additive pos embed for RoPE |
-| `lm_head = nn.Linear(..., bias=False)` | ✅ Correct | Applied from SWAP 3 onwards. Matches LLaMA/Karpathy reference |
-| `nanollama` arch validation in `__post_init__` | ✅ Correct | Enforces gqa+rope+rmsnorm constraint |
-| `_init_weights`: general `std = 1/√d_model` | ✅ Correct | 0.036 for d_model=768 |
-| `_init_weights`: `residual_std` for out_proj/w_down/fc2 | ✅ Correct | Karpathy: `std / √(2 × n_layers)` for residual stream projections |
-| `_init_weights`: override token_embed + lm_head to `std=0.02` | ✅ Correct | Applied after loop. Pod verified: std=0.0200 |
+| `logit_softcap: Optional[float]` in `MiniGPTConfig` | Correct | Gemma-style cap applied as `cap * tanh(x/cap)` post lm_head |
+| `qk_norm: bool = False` in `MiniGPTConfig` | Correct | Threaded to attention via blocks |
+| `pos_embed = None` when `pos_encoding_type="rope"` | Correct | No additive pos embed for RoPE |
+| `lm_head = nn.Linear(..., bias=False)` | Correct | Applied from SWAP 3 onwards. Matches LLaMA/Karpathy reference |
+| `nanollama` arch validation in `__post_init__` | Correct | Enforces gqa+rope+rmsnorm constraint |
+| `_init_weights`: general `std = 1/√d_model` | Correct | 0.036 for d_model=768 |
+| `_init_weights`: `residual_std` for out_proj/w_down/fc2 | Correct | Karpathy: `std / √(2 × n_layers)` for residual stream projections |
+| `_init_weights`: override token_embed + lm_head to `std=0.02` | Correct | Applied after loop. Pod verified: std=0.0200 |
 
 **Note on init logic:** The general loop visits `lm_head.weight` (matches `else` branch) and sets it to `std=0.036`. The explicit override at the end then sets it to `0.02`. The override wins. Functionally correct.
 
@@ -36,15 +34,15 @@ The "unintended" init changes in SWAP 3 (lm_head bias=False, token_embed std=0.0
 
 | Change | Status | Notes |
 |--------|--------|-------|
-| `import torch.nn.functional as F` | ✅ | Required for SDPA |
-| `from llm_lab.core.model.norms import RMSNorm` | ✅ | Required for QK-Norm |
-| `qk_norm: bool` in `MultiHeadAttentionConfig` | ✅ Correct | Threads to GQA path |
-| QK-Norm applied **pre-RoPE** | ✅ Correct | `q_norm(q)` → `k_norm(k)` → `repeat_interleave` → RoPE |
-| `q_norm = RMSNorm(head_dim)`, `k_norm = RMSNorm(head_dim)` | ✅ Correct | Per-head normalization, head_dim=64 |
-| SDPA in MHA path (`unsqueeze/squeeze` per head) | ✅ Correct | 12 SDPA launches/step (known limitation vs GQA's 1) |
-| SDPA in GQA path (`is_causal=True`) | ✅ Correct | Single batched kernel |
-| GQA dropout: `self.config.dropout` | ✅ Correct | Fixed from prior `self.dropout_p` AttributeError |
-| GQA KV cache: stores H_kv heads, expands for attention | ✅ Correct | ABI: `[B, H_kv, T, D]` |
+| `import torch.nn.functional as F` | Valid | Required for SDPA |
+| `from llm_lab.core.model.norms import RMSNorm` | Valid | Required for QK-Norm |
+| `qk_norm: bool` in `MultiHeadAttentionConfig` | Correct | Threads to GQA path |
+| QK-Norm applied **pre-RoPE** | Correct | `q_norm(q)` → `k_norm(k)` → `repeat_interleave` → RoPE |
+| `q_norm = RMSNorm(head_dim)`, `k_norm = RMSNorm(head_dim)` | Correct | Per-head normalization, head_dim=64 |
+| SDPA in MHA path (`unsqueeze/squeeze` per head) | Correct | 12 SDPA launches/step (known limitation vs GQA's 1) |
+| SDPA in GQA path (`is_causal=True`) | Correct | Single batched kernel |
+| GQA dropout: `self.config.dropout` | Correct | Fixed from prior `self.dropout_p` AttributeError |
+| GQA KV cache: stores H_kv heads, expands for attention | Correct | ABI: `[B, H_kv, T, D]` |
 
 **GQA RoPE order analysis:**
 ```
@@ -61,26 +59,26 @@ Since all `repeat` copies are identical before RoPE and get identical position_i
 
 | Change | Status | Notes |
 |--------|--------|-------|
-| `qk_norm: bool = False` in `TransformerBlockConfig` | ✅ Correct | Threads to `MultiHeadAttentionConfig` |
+| `qk_norm: bool = False` in `TransformerBlockConfig` | Correct | Threads to `MultiHeadAttentionConfig` |
 
 ### 2.4 `optim.py`
 
 | Change | Status | Notes |
 |--------|--------|-------|
-| `betas = (0.9, 0.95)` | ✅ Correct | Already present. Matches Karpathy β₂=0.95 |
-| Embed + lm_head excluded from weight decay | ✅ Correct | Already present. `'embed' in name or 'lm_head' in name` |
-| `import inspect` | ✅ | Required for fused check |
-| `fused = fused_available` via `inspect.signature` | ✅ Correct | Free 2–3× optimizer step speedup on CUDA |
+| `betas = (0.9, 0.95)` | Correct | Already present. Matches Karpathy β₂=0.95 |
+| Embed + lm_head excluded from weight decay | Correct | Already present. `'embed' in name or 'lm_head' in name` |
+| `import inspect` | Valid | Required for fused check |
+| `fused = fused_available` via `inspect.signature` | Correct | Free 2–3× optimizer step speedup on CUDA |
 
 **Weight decay group tensor counts — verified by first-principles calculation:**
 
 For SWAP 2 (MHA, 12L, RMSNorm, RoPE, old code with lm_head.bias):
-- Decay = 12L × (12 heads × 3 q/k/v weights + out_proj.weight + fc1.weight + fc2.weight) = 12 × 39 = **468** ✅
-- NoDecay = token_embed(1) + lm_head.weight(1) + lm_head.bias(1, old code) + ln_f.weight(1) + 12L × (norm1 + norm2 + out_proj.bias + fc1.bias + fc2.bias + 12×3 head biases) = 4 + 12×41 = **495** ✅
+- Decay = 12L × (12 heads × 3 q/k/v weights + out_proj.weight + fc1.weight + fc2.weight) = 12 × 39 = **468** 
+- NoDecay = token_embed(1) + lm_head.weight(1) + lm_head.bias(1, old code) + ln_f.weight(1) + 12L × (norm1 + norm2 + out_proj.bias + fc1.bias + fc2.bias + 12×3 head biases) = 4 + 12×41 = **495** 
 
 For SWAP 4 (GQA kv=12, 12L, QK-Norm, new code, no lm_head.bias):
-- Decay = 12L × (q_proj + k_proj + v_proj + out_proj + fc1 + fc2) = 12 × 6 = **72** ✅
-- NoDecay = token_embed(1) + lm_head.weight(1) + ln_f.weight(1) + 12L × (norm1 + norm2 + q_norm + k_norm + q/k/v/out biases(4) + fc1/fc2 biases(2)) = 3 + 12×10 = **123** ✅
+- Decay = 12L × (q_proj + k_proj + v_proj + out_proj + fc1 + fc2) = 12 × 6 = **72** 
+- NoDecay = token_embed(1) + lm_head.weight(1) + ln_f.weight(1) + 12L × (norm1 + norm2 + q_norm + k_norm + q/k/v/out biases(4) + fc1/fc2 biases(2)) = 3 + 12×10 = **123** 
 
 ---
 
@@ -90,25 +88,25 @@ For SWAP 4 (GQA kv=12, 12L, QK-Norm, new code, no lm_head.bias):
 
 | Swap | Features | n_layers | kv_heads | d_ff | norm | mlp | Match |
 |------|----------|----------|----------|------|------|-----|-------|
-| 0 | GPT-2 baseline | 12 | None (MHA) | 3072 | layernorm | gelu | ✅ |
-| 1 | +RoPE | 12 | None (MHA) | 3072 | layernorm | gelu | ✅ |
-| 2 | +RMSNorm | 12 | None (MHA) | 3072 | rmsnorm | gelu | ✅ |
-| 3 | +logit_softcap=30 | 12 | None (MHA) | 3072 | rmsnorm | gelu | ✅ |
-| 4 | +QK-Norm | 12 | 12 (GQA) | 3072 | rmsnorm | gelu | ✅ |
-| 5 | +SwiGLU d_ff=2048 | 12 | 12 (GQA) | 2048 | rmsnorm | swiglu | ✅ |
-| 6 | +GQA kv=4 | 12 | 4 (GQA) | 2048 | rmsnorm | swiglu | ✅ |
-| 7 | Full NanoLlama 8L | **8** | 4 (GQA) | 2048 | rmsnorm | swiglu | ✅ |
+| 0 | GPT-2 baseline | 12 | None (MHA) | 3072 | layernorm | gelu | Valid |
+| 1 | +RoPE | 12 | None (MHA) | 3072 | layernorm | gelu | Valid |
+| 2 | +RMSNorm | 12 | None (MHA) | 3072 | rmsnorm | gelu | Valid |
+| 3 | +logit_softcap=30 | 12 | None (MHA) | 3072 | rmsnorm | gelu | Valid |
+| 4 | +QK-Norm | 12 | 12 (GQA) | 3072 | rmsnorm | gelu | Valid |
+| 5 | +SwiGLU d_ff=2048 | 12 | 12 (GQA) | 2048 | rmsnorm | swiglu | Valid |
+| 6 | +GQA kv=4 | 12 | 4 (GQA) | 2048 | rmsnorm | swiglu | Valid |
+| 7 | Full NanoLlama 8L | **8** | 4 (GQA) | 2048 | rmsnorm | swiglu | Valid |
 
 Training hyperparameters — consistent across ALL 8 swaps:
-- B=8, T=1024, GA=64 → total_batch=524,288 tokens/step ✅
-- max_lr=6e-4, min_lr=6e-5, warmup=50, max_steps=500 ✅
-- Val: 20 batches, reset pos=0, bf16 autocast, at step 0/250/500 ✅
-- Data: `data/edu_fineweb10B/` (persistent, same shards) ✅
+- B=8, T=1024, GA=64 → total_batch=524,288 tokens/step 
+- max_lr=6e-4, min_lr=6e-5, warmup=50, max_steps=500 
+- Val: 20 batches, reset pos=0, bf16 autocast, at step 0/250/500 
+- Data: `data/edu_fineweb10B/` (persistent, same shards) 
 
 **SwiGLU FFN parameter parity verified:**
 - GELU d_ff=3072: 2 matrices × 768×3072 = 4,718,592 params/layer
-- SwiGLU d_ff=2048: 3 matrices × 768×2048 = 4,718,592 params/layer ✅ (exact match)
-- SWAP 5 is smaller than SWAP 4 by 46,080 params = 12L × (fc1.bias[3072] + fc2.bias[768]) = SwiGLU removing GELU bias terms ✅
+- SwiGLU d_ff=2048: 3 matrices × 768×2048 = 4,718,592 params/layer  (exact match)
+- SWAP 5 is smaller than SWAP 4 by 46,080 params = 12L × (fc1.bias[3072] + fc2.bias[768]) = SwiGLU removing GELU bias terms 
 
 ### 3.2 Critical Anomaly: Init Change Mid-Experiment (SWAP 2→3 Boundary)
 
@@ -128,8 +126,8 @@ This confirms the hot-patch took effect on SWAP 3.
 | Change | SWAP 0–2 | SWAP 3–7 | Correct for Plan? |
 |--------|----------|----------|-------------------|
 | logit_softcap=30 | None | 30.0 | Intended swap feature |
-| lm_head.bias | True (wrong) | False ✅ | **Correct** — LLaMA/Karpathy have no lm_head bias |
-| token_embed init std | 0.036 (wrong) | 0.02 ✅ | **Correct** — Karpathy uses 0.02 for embeddings |
+| lm_head.bias | True (wrong) | False Valid | **Correct** — LLaMA/Karpathy have no lm_head bias |
+| token_embed init std | 0.036 (wrong) | 0.02 Valid | **Correct** — Karpathy uses 0.02 for embeddings |
 
 **Key reframing:** The "unintended" changes are actually corrections. SWAPs 0–2 were running with slightly wrong init. SWAP 3 onwards uses the correct init that NanoLlama 8L will also use.
 
@@ -137,24 +135,24 @@ This confirms the hot-patch took effect on SWAP 3.
 
 | Comparison | Validity | Reason |
 |------------|----------|--------|
-| SWAP 0↔1↔2 | ✅ Clean | All use same (wrong) init — deltas are real |
-| SWAP 2→3 | ⚠️ Confounded | softcap + bias removal + embed init all changed |
-| SWAP 3↔4↔5↔6↔7 | ✅ Clean | All use same correct init |
-| (NanoLlama 8L vs SWAP 7 | ✅ Valid | Same init, same arch, different B/GA/steps |
+| SWAP 0↔1↔2 | Clean | All use same (wrong) init — deltas are real |
+| SWAP 2→3 | Confounded | softcap + bias removal + embed init all changed |
+| SWAP 3↔4↔5↔6↔7 | Clean | All use same correct init |
+| (NanoLlama 8L vs SWAP 7 | Valid | Same init, same arch, different B/GA/steps |
 
 ### 3.3 SWAP 0 Baseline: Untied Weights
 
 SWAP 0 uses `attention_type="mha"` with `pos_encoding_type="learned"` and does NOT tie lm_head.weight to token_embed.weight. Real GPT-2 small (124M) uses tied weights. Result:
 - SWAP 0 total_params = **163.16M** (vs 124M true GPT-2)
 - Extra capacity: 38.6M params (separate lm_head matrix) + pos_embed.weight (0.79M)
-- val@500 = 5.0825 is an **internal reference only**, not comparable to Karpathy's GPT-2 baseline
+- val@500 = 5.0825 is not directly comparable to Karpathy's GPT-2 baseline
 
 ### 3.4 SWAP 4 Code Path Change (MHA → GQA)
 
 SWAP 4 adds QK-Norm but also switches from MHA (per-head `SingleHeadAttention` loop) to GQA (consolidated projections) with kv=12=n_heads. This introduces:
 - Different parameter layout (72 vs 468 decay tensors)
 - Batched SDPA: **throughput jump 38K → 61K tok/s** (implementation, not math change)
-- With repeat=1 (kv=n_heads), GQA path is mathematically identical to MHA ✅
+- With repeat=1 (kv=n_heads), GQA path is mathematically identical to MHA 
 
 ---
 
@@ -181,13 +179,13 @@ deltas were reported — that was incomplete.
 | Swap | Config | val@500 | params | Δ cumulative (vs SWAP 0) | Δ incremental (vs prior) | Validity |
 |------|--------|---------|--------|--------------------------|--------------------------|----------|
 | 0 | GPT-2 baseline | 5.0825 | 163.16M | — | — | Internal ref (untied, not true GPT-2) |
-| 1 | +RoPE | 4.6965 | 162.37M | −0.3860 | **−0.3860** | ✅ |
-| 2 | +RMSNorm | 4.7127 | 162.35M | −0.3698 | **+0.0162** (slight regression) | ✅ |
-| 3 | +softcap=30 | 4.7997 | 162.30M | −0.2828 | **+0.0870** | ⚠️ confounded (3 simultaneous changes) |
-| 4 | +QK-Norm | 4.7820 | 162.31M | −0.3005 | **−0.0177** (small gain) | ✅ (also MHA→GQA path switch) |
-| 5 | +SwiGLU d_ff=2048 | 4.6430 | 162.26M | −0.4395 | **−0.1390** ← strongest feature | ✅ |
-| 6 | +GQA kv=4 | 4.6383 | 152.81M | −0.4442 | **−0.0047** (marginal) | ✅ |
-| 7 | Full NanoLlama 8L | 4.6918 | 127.63M | −0.3907 | **+0.0535** (capacity regression) | ✅ |
+| 1 | +RoPE | 4.6965 | 162.37M | −0.3860 | **−0.3860** | Valid |
+| 2 | +RMSNorm | 4.7127 | 162.35M | −0.3698 | **+0.0162** (slight regression) | Valid |
+| 3 | +softcap=30 | 4.7997 | 162.30M | −0.2828 | **+0.0870** | confounded (3 simultaneous changes) |
+| 4 | +QK-Norm | 4.7820 | 162.31M | −0.3005 | **−0.0177** (small gain) |  (also MHA→GQA path switch) |
+| 5 | +SwiGLU d_ff=2048 | 4.6430 | 162.26M | −0.4395 | **−0.1390** ← strongest feature | Valid |
+| 6 | +GQA kv=4 | 4.6383 | 152.81M | −0.4442 | **−0.0047** (marginal) | Valid |
+| 7 | Full NanoLlama 8L | 4.6918 | 127.63M | −0.3907 | **+0.0535** (capacity regression) | Valid |
 
 **Feature signal rankings by incremental delta:**
 1. SwiGLU: −0.139 (strongest by far)
@@ -245,11 +243,11 @@ Impractical. GPT-2 baseline is an approximation for SWAP 7 comparison only.
 
 | Fix | Applied | Correct | NanoLlama 8L Impact |
 |-----|---------|---------|----------------|
-| lm_head bias=False | ✅ SWAP 3+ | ✅ LLaMA/Karpathy standard | No lm_head bias in NanoLlama 8L |
-| token_embed std=0.02 | ✅ SWAP 3+ | ✅ Karpathy standard | Correct embed init in NanoLlama 8L |
-| fused AdamW | ✅ SWAP 3+ | ✅ Free speedup | ~2–3× faster optimizer steps |
-| B=16/GA=32 | ⏳ NanoLlama 8L | ✅ Karpathy reference batch | In NanoLlama 8L training |
-| warmup=200 | ⏳ NanoLlama 8L | ✅ Scaled for longer run | In NanoLlama 8L training |
+| lm_head bias=False |  SWAP 3+ |  LLaMA/Karpathy standard | No lm_head bias in NanoLlama 8L |
+| token_embed std=0.02 |  SWAP 3+ | Karpathy standard | Correct embed init in NanoLlama 8L |
+| fused AdamW |  SWAP 3+ | Free speedup | ~2–3× faster optimizer steps |
+| B=16/GA=32 | NanoLlama 8L (planned) |  Karpathy reference batch | In NanoLlama 8L training |
+| warmup=200 | NanoLlama 8L (planned) | Scaled for longer run | In NanoLlama 8L training |
 
 ---
 

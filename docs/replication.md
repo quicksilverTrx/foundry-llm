@@ -2,8 +2,7 @@
 
 Exact steps to reproduce the full NanoLlama 8L pretraining result from scratch.
 
-> **Already have the local run?** All artifact locations (checkpoints, logs, CSVs) are indexed in [`docs/local_artifacts.md`](local_artifacts.md).
-> Final checkpoint is at `experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt`.
+> **Already have the local run?** Final checkpoint is at `experiments/tinyllama_pretrain_2026-03-31/phase6/ckpts/step_04768_model_only.pt`.
 
 ---
 
@@ -141,3 +140,115 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 - Monitor with `watch -n2 nvidia-smi` and `tail -f out/run.log`
 - If OOM: the script sets `expandable_segments:True` automatically; if still OOM reduce `B` in the config
 - Checkpoint every 500 steps is the default; increase `ckpt_every` for less disk usage
+
+---
+
+# NanoLlama v2 — 127M, 5B tokens
+
+Same hardware as v1. Adds partial RoPE, value embeddings, x0-mixin. Uses AdamW (Muon underperforms on GQA+SwiGLU — see `docs/architecture_decisions.md`).
+
+## Hardware
+
+Same requirements as v1. Disk: ~25 GB (shards, shared with v1) + ~5 GB checkpoints.
+
+## Step 1 — Data
+
+Same as v1: `python data/prepare_dataset.py`. The shard files are identical.
+
+## Step 2 — Train (~12 h on RTX 4090)
+
+```bash
+python scripts/train_nanollama_v2.py \
+  --data_dir ./data/edu_fineweb10B \
+  --run_dir  ./runs/nanollama_v2 \
+  --optimizer adamw
+```
+
+Config is driven by `configs/nanollama_v2_127m.json`. Key differences from v1:
+- `rope_fraction=0.5` (partial RoPE)
+- `n_value_embeds=2`
+- `use_x0_mixin=True`
+- `max_steps=9537` (5.0B tokens)
+- LR schedule: constant_warmdown with `warmdown_ratio=0.4`
+
+## Expected results
+
+| Step | Tokens | Val loss |
+|------|--------|----------|
+| 1500 | 786M | ~3.715 |
+| 5000 | 2.62B | ~3.345 (beats v1) |
+| 9000 | 4.72B | **3.2210** |
+
+Full run ends at step 9537 (5.0B tokens). Production run ended at step 9000 due to disk; final val at 9537 estimated 3.21–3.22.
+
+## Step 3 — Evaluate
+
+```bash
+python scripts/eval/eval_hellaswag.py --ckpt runs/nanollama_v2/ckpts/best_val.pt
+python -i scripts/interact.py          --ckpt runs/nanollama_v2/ckpts/best_val.pt
+```
+
+---
+
+# SwiftLlama-350M — 345M parameters, 4096-token context
+
+Significantly larger model. Requires a GPU with ≥22 GB VRAM (bfloat16, B=2, T=4096).
+
+## Hardware
+
+| Item | Required | Used in original run |
+|------|----------|---------------------|
+| GPU | ≥22 GB VRAM | RTX 4090 (24 GB) |
+| Disk | ~30 GB (shards) + ~15 GB checkpoints | ~45 GB |
+| Training time | ~110 h (RTX 4090) | ~110 h (28,610 steps) |
+
+At B=2, GA=64, T=4096: effective 524,288 tok/step. Same as NanoLlama despite smaller batch — longer sequences compensate.
+
+## Step 1 — Data
+
+Same FineWeb-Edu shards as v1/v2:
+
+```bash
+python data/prepare_dataset.py --out_dir ./data/edu_fineweb10B
+```
+
+Alternatively, use `scripts/download_fineweb_parallel.py` for faster parallel download:
+
+```bash
+python scripts/download_fineweb_parallel.py --out-dir ./data/edu_fineweb10B
+```
+
+## Step 2 — Train
+
+```bash
+python scripts/train_swiftllama_350m.py \
+  --data_dir ./data/edu_fineweb10B \
+  --run_dir  ./runs/swiftllama_350m
+```
+
+Config: `configs/swiftllama_350m.json`. Uses Muon optimizer (production decision; AdamW is preferred for future runs — see `docs/architecture_decisions.md`).
+
+**OOM note:** B=4, T=4096 at fp32 overflows 24 GB. The script uses bfloat16 and B=2 by default, keeping VRAM at ~20.7 GB.
+
+## Expected results
+
+| Step | Tokens | Val loss |
+|------|--------|----------|
+| 7000 | 3.67B | ~3.520 |
+| 11500 | 6.03B | ~3.414 |
+| 16000 | 8.39B | ~3.357 |
+| ~28610 | ~15B | TBD |
+
+Chinchilla-optimal (6.9B unique tokens) reached at step ~15,174.
+
+## Step 3 — Evaluate (5-task benchmark)
+
+```bash
+# HellaSwag
+python scripts/eval/eval_hellaswag.py --ckpt runs/swiftllama_350m/ckpts/best_val.pt
+
+# Interactive sampling
+python -i scripts/interact.py --ckpt runs/swiftllama_350m/ckpts/best_val.pt
+```
+
+Full 5-task evaluation (ARC-Easy, PIQA, WinoGrande, Lambada, HellaSwag): use `experiments/swiftllama_pretrain_2026-04-13/scripts/eval_swiftllama.py` as a reference — adapt paths as needed.
