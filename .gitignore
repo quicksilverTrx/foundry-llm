@@ -14,6 +14,15 @@
 # Allow specific tracked docs and results
 !README.md
 !docs/ablation_analysis.md
+!docs/architecture_decisions.md
+!docs/model_architecture.md
+!docs/training_results.md
+!docs/training_dynamics.md
+!docs/retrospective.md
+!docs/muon_decision_rationale.md
+!docs/qualitative_eval.md
+!docs/serving_nanollama_tiktoken.md
+!docs/serving_project_deliverables.md
 !docs/eval_results.md
 !docs/replication.md
 !results/nanollama_8l_training.csv
