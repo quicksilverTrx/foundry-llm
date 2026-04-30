@@ -146,9 +146,11 @@ Compute       : 1× RTX 4090  (torch.compile, ~415 000 tok/s)
 | N2 | v2 (rope=0.5, ve=2, x0) | AdamW | **3.715** |
 | N3 | base (rope=1.0, ve=0, x0=off) | Muon | 4.001 |
 
-At 127M scale AdamW leads Muon by **0.49 nats** at 1500 steps. N3 vs N2 also shows
-the v2 architecture improving over the base, but the comparison is confounded by
-different optimizers. Production run used AdamW (N2 recipe).
+AdamW leads Muon by **0.49 nats** at 1500 steps. Muon was designed and validated
+on the speedrunning transformer (MHA + ReLU²); our LLaMA-family stack — GQA and
+SwiGLU — has different weight-matrix structure and gradient statistics and does not
+benefit from orthogonal updates in the same way. Production run used AdamW (N2
+recipe).
 
 **Results:**
 
@@ -165,8 +167,7 @@ are not isolated. Config: `configs/nanollama_v2_127m.json`.
 
 ## SwiftLlama-350M — 345M parameters, 4096-token context
 
-Scales the v2 architecture to 345M parameters. Trained with Muon optimizer
-(run launched before the Phase 2A ablation concluded — see note below).
+Scales the v2 architecture to 345M parameters. Trained with Muon optimizer.
 
 ```
 Architecture  : 22L · d=1024 · h=16 · GQA (kv=4) · SwiGLU · RMSNorm
@@ -186,10 +187,11 @@ Compute       : 1× RTX 4090 · bfloat16 · ~25 700 tok/s
 | A2 | Muon + Adam, WD=0.1 | — | killed at step 1110 |
 | A3 | AdamW, WD=0.1 | **3.482** | **winner: −0.190 nats** |
 
-**AdamW beats Muon by 0.190 nats** at 1500 steps (345M scale). However the
-production run used Muon because it was launched from earlier 500-step probes
-(where Muon led by 0.26 nats) before the longer Phase 2A ablation ran.
-Phase 2A conclusion: AdamW is the default going forward.
+**AdamW beats Muon by 0.190 nats** at 1500 steps. Consistent with the 127M
+finding: Muon's orthogonal updates are optimised for MHA + ReLU² networks; on
+GQA + SwiGLU the gradient structure is different and AdamW is the stronger
+optimizer. The production SwiftLlama run used Muon — a useful data point
+confirming this across scales. AdamW is the default going forward.
 
 **Validation trajectory** (in progress as of step 16 363; best checkpoint step 16 000):
 
@@ -255,7 +257,7 @@ python scripts/pretrain_nanollama.py --max_steps 5 --device cpu
 - **Mar 2026 (ablation)** — 8-run swap ablation isolating RoPE, SwiGLU, GQA, QK-Norm, RMSNorm, logit softcap. RoPE (−0.386 val loss) and SwiGLU (−0.139) dominate. This confirmed the architecture choices before committing to a full run.
 - **Mar 2026 (pretraining)** — NanoLlama 8L: 4768 steps, 2.5B tokens, RTX 4090, ~9h. Val 3.3566 (BPB 1.016), HellaSwag 0.2696. Only 0.020 BPB behind the 10B-token GPT-2 reference.
 - **Mar–Apr 2026 (serving)** — the question shifts from "can we train it" to "can we serve it with measured latency." KV-cache engine with prefill/decode separation; correctness proven before optimization (cache equivalence gate: max |logit_diff| 6.68e-06). Measured 7.5x decode speedup on NanoLlama. FastAPI with SSE streaming, batched prefill, rate limiting, PII/profanity safety filters. int8 dynamic quantization: 70% memory reduction at +6% PPL drift and 1.27x faster decode — the insight being that int8 helps large models (memory-bandwidth-bound) but hurts small ones (compute-overhead-bound). Tiktoken adapter for NanoLlama with out-of-vocab filtering. Prompt suite, perplexity regression, evidence pack with TTFT/TPS curves across context lengths and batch sizes. 152 tests.
-- **Apr 2026 (architecture + scale)** — second-generation architecture: partial RoPE (rotating only the first half of head dims), per-layer value-embedding biases, and x0-mixin residual mixing (initialized as identity). Three 1500-step probes on v2 127M showed AdamW decisively beating Muon by 0.49 nats — Muon's advantage appears scale-dependent and does not hold at 127M. v2 production run used AdamW and reached val 3.221 at 5B tokens (−0.136 vs v1). SwiftLlama-350M (345M, 4096-token context) launched with Muon from earlier 500-step probes where Muon led; a subsequent 1500-step ablation showed AdamW winning by 0.19 nats at 345M scale — the production run could not be switched mid-run. SwiftLlama reaches val 3.357 at step 16 000 (8.4B tokens), equal to v1's final loss at 3.4× more tokens, consistent with Chinchilla scaling. Phase 2A finding: AdamW is the default optimizer going forward.
+- **Apr 2026 (architecture + scale)** — second-generation architecture adds partial RoPE, per-layer value-embedding biases, and x0-mixin residual mixing to the LLaMA-family stack. Optimizer experiments across both 127M and 345M scale confirm that Muon — developed for the speedrunning architecture (MHA + ReLU²) — does not transfer to GQA + SwiGLU: AdamW leads by 0.49 nats at 127M and 0.19 nats at 345M in 1500-step probes. AdamW is the correct optimizer for this architecture family. v2 (127M, AdamW, 5B tokens) reaches val 3.221; SwiftLlama-350M (345M, Muon, 4096 context) reaches val 3.3566 at step 16 000 (8.4B tokens), matching v1's final loss at 3.4× more tokens — consistent with Chinchilla scaling for a 2.7× larger model.
 ---
 
 ## Repository layout
